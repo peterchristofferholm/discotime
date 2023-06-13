@@ -21,7 +21,7 @@ from discotime.datasets.utils import LabelDiscretizer
 
 
 _ROOT_PATH = Path(discotime.__file__).parent
-_DATA_PATH = _ROOT_PATH / "datasets" / "_data" / "_downloads"
+_DATA_PATH = _ROOT_PATH / "datasets" / "_data"
 
 
 class Mgus2(LitSurvDataModule):
@@ -74,6 +74,8 @@ class Mgus2(LitSurvDataModule):
         url = "https://github.com/therneau/survival/raw/649851/data/cancer.rda"
 
         if not self.mgus2_csv.is_file():
+            # create data directory if needed
+            self.mgus2_csv.parent.mkdir(parents=True, exist_ok=True)
             # download and parse rdata file
             r = requests.get(url)
             parsed = rdata.parser.parse_data(r.content)

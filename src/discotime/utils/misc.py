@@ -37,7 +37,7 @@ def update_mapping(d: Mapping, u: Mapping) -> Mapping:
     Example:
         >>> foo = {"dog" : {"color" : "black", "age" : 10}}
         >>> bar = {"dog" : {"age" : 11}, "cat" : None}
-        >>> recursive_update(foo, bar)
+        >>> update_mapping(foo, bar)
         {'dog': {'color': 'black', 'age': 11}, 'cat': None}
     """
     for k, v in u.items():

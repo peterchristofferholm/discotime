@@ -133,7 +133,7 @@ class AalenJohansen:
         # cause-specific incidences
         n_risks = n_causes if n_causes else np.max(event)
         ci = np.zeros((tj.size, n_risks))
-        for e in range(1, n_risks):
+        for e in range(1, n_risks + 1):
             mcj = _pad(_tabulate(tj, time[event == e]))
             ci[:, e - 1] = np.cumsum(sj * (mcj / nj))
 
