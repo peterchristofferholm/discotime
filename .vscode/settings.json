@@ -1,0 +1,32 @@
+{
+    "python.formatting.provider": "none",
+    "python.formatting.blackArgs": [
+        "--line-length=79"
+    ],
+    "python.testing.pytestArgs": [
+        "tests"
+    ],
+    "python.testing.unittestEnabled": false,
+    "python.testing.pytestEnabled": true,
+    "editor.rulers": [
+        79
+    ],
+    "files.exclude": {
+        "**/.git": true,
+        "**/.svn": true,
+        "**/.hg": true,
+        "**/CVS": true,
+        "**/.DS_Store": true,
+        "**/Thumbs.db": true,
+        ".venv": true,
+        ".hypothesis": true,
+        ".tox": true,
+        ".quarto": true,
+        ".*_cache": true,
+        "**/__pycache__": true,
+        ".Rproj.user": true,
+    },
+    "[python]": {
+        "editor.defaultFormatter": "ms-python.black-formatter"
+    }
+}
