@@ -20,6 +20,8 @@ class Transformer(Protocol):
 
 
 class LabelTransformer(Transformer, Protocol):
+    """LabelTransformer"""
+
     def fit(self, time: Iterable[Num], event: Iterable[Int]) -> None:
         ...
 

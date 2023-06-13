@@ -1,11 +1,7 @@
-API Reference
-=============
+discotime
+=========
 
 .. toctree::
-   :maxdepth: 1
+   :maxdepth: 4
 
    discotime
-   discotime.datasets
-   discotime.models
-   discotime.metrics
-   discotime.utils

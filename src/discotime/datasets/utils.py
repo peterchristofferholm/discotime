@@ -35,10 +35,10 @@ class SurvDataset(Dataset):
         features: time-independent features.
         event_time: follow-up time (continuous).
         event_status: event indicator (0=censored, 1/2/...=competing risks).
-        discretizer: discretizer that follows the :obj:`LabelTransformer`
+        discretizer: discretizer that follows the :py:class:`LabelTransformer`
             protocol that convert continuous time/event tuples to their
             respective discretized versions. Typically this would be
-            :obj:`LabelDiscretizer` unless a custom discretization object is
+            :py:class:`LabelDiscretizer` unless a custom discretization object is
             used.
     """
 

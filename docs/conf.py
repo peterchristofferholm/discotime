@@ -3,6 +3,12 @@
 # For the full list of built-in configuration values, see the documentation:
 # https://www.sphinx-doc.org/en/master/usage/configuration.html
 
+from importlib import metadata
+import os
+
+PACKAGE_VERSION = metadata.version("discotime")
+version = release = PACKAGE_VERSION
+
 # -- Project information -----------------------------------------------------
 project = "discotime"
 copyright = "2023, Peter Christoffer Holm"
@@ -11,9 +17,9 @@ author = "Peter Christoffer Holm"
 # -- General configuration ---------------------------------------------------
 extensions = [
     "sphinx.ext.autodoc",
+    # "sphinx.ext.autodoc.typehints",
     "sphinx.ext.intersphinx",
     "sphinx.ext.viewcode",
-    "sphinx.ext.autodoc.typehints",
     "sphinx.ext.napoleon",
 ]
 intersphinx_mapping = {
@@ -55,3 +61,33 @@ exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
 
 html_theme = "sphinx_rtd_theme"
 html_static_path = ["_static"]
+
+# -- Setup for sphinx-apidoc -------------------------------------------------
+
+# Read the Docs doesn't support running arbitrary commands like tox.
+# sphinx-apidoc needs to be called manually if Sphinx is running there.
+# https://github.com/readthedocs/readthedocs.org/issues/1139
+
+if os.environ.get("READTHEDOCS") == "True":
+    from pathlib import Path
+
+    PROJECT_ROOT = Path(__file__).parent.parent
+    PACKAGE_ROOT = PROJECT_ROOT / "src" / "discotime"
+
+    def run_apidoc(_):
+        from sphinx.ext import apidoc
+
+        apidoc.main(
+            [
+                "--force",
+                "--implicit-namespaces",
+                "--module-first",
+                "--separate",
+                "-o",
+                str(PROJECT_ROOT / "docs" / "reference"),
+                str(PACKAGE_ROOT),
+            ]
+        )
+
+    def setup(app):
+        app.connect("builder-inited", run_apidoc)
