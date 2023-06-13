@@ -98,7 +98,7 @@ class AalenJohansen:
         self,
         time: npt.ArrayLike,
         event: npt.ArrayLike,
-        n_causes: Optional[int] = None,
+        n_causes: Optional[Int] = None,
     ) -> None:
         time, event = map(np.asarray, (time, event))
 

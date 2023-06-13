@@ -86,6 +86,9 @@ class BaseFabricTrainer:
             self.module.configure_optimizers(),
         )
 
+        assert isinstance(train_dl, DataLoader)
+        assert isinstance(valid_dl, DataLoader)
+
         while True:
             self.module.train()
             with torch.set_grad_enabled(True):
@@ -101,7 +104,7 @@ class BaseFabricTrainer:
                     module.validation_step(batch, idx) * len(batch[1])
                     for idx, batch in enumerate(valid_dl)
                 )
-                yield sum(losses) / len(valid_dl.sampler)
+                yield sum(losses) / len(valid_dl.sampler)  # type: ignore
 
 
 def split_dataset(

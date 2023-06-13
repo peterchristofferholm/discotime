@@ -36,7 +36,7 @@ def test_data_setup(mgus2_dm: Mgus2):
     assert len(next(iter(mgus2_dm.test_dataloader()))) == 5
 
     # number of cuts is n_time_bins + 1
-    assert len(mgus2_dm.cuts) == (mgus2_dm.hparams.data_config.n_time_bins + 1)
+    assert len(mgus2_dm.cuts) == (mgus2_dm.hparams.data_config.n_time_bins + 1)  # type: ignore
 
 
 @mark.filterwarnings("ignore")
