@@ -1,9 +1,9 @@
 # Discotime: Discrete-time Competing Risks Models with PyTorch Lightning
 
-[**Docs**](https://optuna.readthedocs.io/en/stable/)
-| [**Installation**](https://optuna.readthedocs.io/en/stable/installation.html)
-| [**Tutorial**](https://optuna.readthedocs.io/en/stable/tutorial/index.html)
-| [**Examples**](https://github.com/optuna/optuna-examples)
+[**Docs**](https://discotime.readthedocs.io/en/stable/)
+| [**Installation**](https://discotime.readthedocs.io/en/stable/installation.html)
+| [**Tutorial**](https://discotime.readthedocs.io/en/stable/tutorial/index.html)
+| [**Examples**](https://github.com/discotime/examples)
 
 *Discotime* is a python package for discrete-time survival analysis 
 with neural networks that have been designed to handle competing risk models.
