@@ -44,6 +44,7 @@ nitpick_ignore = [
     ("py:class", "pandas.core.series.Series"),
     ("py:class", "discotime.datasets.utils.T_co"),
     ("py:class", "discotime.utils.misc.T"),
+    ("py:class", "LabelTransformer"),
     ("py:class", "T"),
     ("py:class", "numpy.ndarray[typing.Any, numpy.dtype[+T_co]]"),
     ("py:class", "numpy.float64"),

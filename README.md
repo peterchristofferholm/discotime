@@ -1,3 +1,5 @@
+[![Documentation Status](https://readthedocs.org/projects/discotime/badge/?version=latest)](https://discotime.readthedocs.io/en/latest/?badge=latest)
+
 # Discotime: Discrete-time Competing Risks Models with PyTorch Lightning
 
 [**Docs**](https://discotime.readthedocs.io/en/stable/)
@@ -12,6 +14,7 @@ that still can be customized to your heart's content.
 The packages contains an implementation of discrete time-to-event models
 for neural networks (using PyTorch), different evaluation metrics,
 and a couple of different competing risk datasets. 
+
 **The package is currently under development,**
 **Breaking changes are to be expected.**
 

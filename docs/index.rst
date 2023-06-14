@@ -30,8 +30,9 @@ Discrete-time survival analysis
    :maxdepth: 2
 
    
-   installation.rst
-   reference/modules.rst
+   installation
+   examples/00_mgus2-analysis
+   reference/modules
 
 
 License

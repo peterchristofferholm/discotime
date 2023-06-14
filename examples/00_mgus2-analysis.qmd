@@ -1,0 +1,116 @@
+---
+title: "Getting started with `discotime`"
+format: html
+jupyter: python3
+---
+
+```{python}
+import warnings
+
+import numpy as np
+import pandas as pd
+import torch
+
+from lightning import Trainer
+from lightning.pytorch.callbacks import EarlyStopping
+
+from discotime.datasets import Mgus2, DataConfig
+from discotime.models import LitSurvModule, ModelConfig
+
+```
+
+For this example, 
+we will be using the `Mgus2` dataset from the `survival` pacakage in `R`.
+The dataset contains natural history of 1341 patients 
+with monoclonal gammopathy of undetermined significance (MGUS)[^1].
+In the `discotime` package,
+this dataset is supplied as a `LightningDataModule` 
+that automatically handles downloading, 
+preprocessing, splitting into training and testing data, etc.
+
+[^1]: R. Kyle, T. Therneau, V. Rajkumar, J. Offord, D. Larson, M. Plevak,
+    and L. J. Melton III, A long-terms study of prognosis in monoclonal
+    gammopathy of undertermined significance. New Engl J Med, 346:564-569
+    (2002).
+
+For initializiation of the data module, 
+arguments are supplied in the form of a `DataConfig` object as follows.
+
+```{python}
+mgus2dm = Mgus2(
+    DataConfig(
+        batch_size=128,
+        n_time_bins=20,
+        discretization_scheme="number",
+    )
+)
+mgus2dm
+```
+
+If we want to inspect the data,
+we can load the fit (train + val) and test data 
+by calling setup on the object.
+During normal use, this is handled automatically by `Lightning.Trainer`.
+
+```{python}
+mgus2dm.prepare_data()
+mgus2dm.setup()
+mgus2dm.dset_fit
+```
+
+```{python}
+mgus2dm.dset_fit[0]
+```
+
+The data consist of features (a dataframe) and labels.
+The features should be fairly self explanatory,
+and the labels is a tuple of survival times and event indicators.
+In the `Discotime` package and across the other examples,
+an event/status of 0 indicates censoring.
+
+To create the survival model, 
+we use a different configuration object.
+
+```{python}
+model = LitSurvModule(
+    ModelConfig(
+        learning_rate=1e-3,
+        n_hidden_units=15,
+        n_sequential_blocks=5,
+        use_skip_connections=True,
+    )
+)
+```
+
+The last thing we need now is to instantiate the Lightning trainer.
+For this example,
+we will only be using a single CPU,
+but with the lightning Trainer it's easy to scale training to multiple devices
+and/or GPUs.
+
+```{python}
+early_stopping = EarlyStopping(
+    monitor="val_loss", min_delta=0.001, patience=30, mode="min"
+)
+
+warnings.filterwarnings("ignore", "GPU available")
+trainer = Trainer(
+    accelerator="cpu",
+    devices=1,
+    max_epochs=3000,
+    enable_checkpointing=False,
+    enable_progress_bar=False,
+    logger=False,
+    reload_dataloaders_every_n_epochs=1,
+    callbacks=[early_stopping],
+)
+```
+
+```{python}
+warnings.filterwarnings("ignore", ".*bottleneck")
+trainer.fit(model, mgus2dm)
+```
+
+```{python}
+__ = trainer.test(model, mgus2dm)
+```
