@@ -1,13 +1,10 @@
-discotime package
-=================
+discotime
+=========
 
 .. automodule:: discotime
    :members:
    :undoc-members:
    :show-inheritance:
-
-Subpackages
------------
 
 .. toctree::
    :maxdepth: 4

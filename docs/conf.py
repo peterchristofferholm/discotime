@@ -5,13 +5,15 @@
 
 from importlib import metadata
 import os
+from datetime import datetime
 
 PACKAGE_VERSION = metadata.version("discotime")
 version = release = PACKAGE_VERSION
 
 # -- Project information -----------------------------------------------------
 project = "discotime"
-copyright = "2023, Peter Christoffer Holm"
+current_year = datetime.utcnow().year
+copyright = f"{current_year}, Peter C. Holm"
 author = "Peter Christoffer Holm"
 
 # -- General configuration ---------------------------------------------------
@@ -33,6 +35,7 @@ intersphinx_mapping = {
 autodoc_inherit_docstrings = False
 autodoc_default_options = {
     "exclude-members": "__weakref__",
+    "members" : None,
 }
 nitpick_ignore = [
     ("py:class", "collections.abc.Sequence"),
@@ -60,8 +63,9 @@ exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
 
 # -- Options for HTML output -------------------------------------------------
 
-html_theme = "sphinx_rtd_theme"
+html_theme = "pydata_sphinx_theme"
 html_static_path = ["_static"]
+html_css_files = ["custom.css"]
 
 # -- Setup for sphinx-apidoc -------------------------------------------------
 
