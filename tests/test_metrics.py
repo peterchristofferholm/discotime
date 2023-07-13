@@ -1,5 +1,5 @@
 import numpy as np
-import numpy.typing as npt
+import torch
 import pytest
 
 from discotime.metrics.brier_score import _cic_pv

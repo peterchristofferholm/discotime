@@ -1,4 +1,4 @@
-from typing import Optional, Any, Iterable, Callable, Dict
+from typing import Optional, Any, Callable, Dict
 from dataclasses import dataclass
 import warnings
 
@@ -11,7 +11,7 @@ import numpy as np
 from discotime.models.components import Net, negative_log_likelihood
 from discotime.metrics import IPA
 from discotime.datasets import LitSurvDataModule
-from discotime.utils import interpolate2d
+from discotime.utils import Interpolate2D
 
 
 @dataclass(kw_only=True)
@@ -272,7 +272,7 @@ class LitSurvModule(pl.LightningModule):
         proba = torch.cumsum(s_lag * c_haz[..., 1:], dim=1)
         proba = F.pad(proba, pad=(0, 0, 1, 0))
 
-        return interpolate2d(timepoints, self.data_cuts, proba)
+        return Interpolate2D(self.data_cuts, proba)(timepoints)
 
     def configure_optimizers(self) -> torch.optim.Optimizer:
         return torch.optim.Adam(self.model.parameters(), self.learning_rate)
