@@ -5,6 +5,7 @@ import hypothesis.strategies as st
 from einops import repeat
 
 from discotime.utils import KaplanMeier, AalenJohansen, interpolate2d
+from discotime.utils import Interpolate2D
 
 ###############################################################################
 # Kaplan-Meier estimator
@@ -110,9 +111,9 @@ def test_interpolate2d_linear(args):
     hypothesis.assume(torch.unique(x).size() == x.size())
 
     yp = coef[0] * xp + coef[1]
-    yp = repeat(yp, "t -> b t r", b=10, r=2)
+    yp = repeat(yp, "t -> b r t", b=10, r=2)
 
     y = coef[0] * x + coef[1]
-    y = repeat(y, "t -> b t r", b=10, r=2)
+    y = repeat(y, "t -> b r t", b=10, r=2)
 
-    assert interpolate2d(x, xp, yp) == pytest.approx(y, abs=1e-3)
+    assert Interpolate2D(xp, yp)(x) == pytest.approx(y, abs=1e-3)
