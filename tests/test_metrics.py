@@ -1,95 +1,88 @@
-import numpy as np
 import torch
-import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 
-from discotime.metrics.brier_score import _cic_pv
-from discotime.metrics import BrierScore, IPA
-
-
-def test_cic_pseudovalues(comprisk_testdata):
-    """Test _cic_pseudovalues.
-
-    See if the implementation gives similar results to similar to jacknife
-    implementation provided by the `prodlim` package in R.
-
-    The expected output is obtained like this:
-
-    ```{r}
-    pfit <- prodlim(Hist(time, status) ~ 1, data = data)
-    jackknife(pfit, times=c(0, 3.2, 10, 10.1, 20.1), cause=1)
-    ```
-    """
-    time, event = comprisk_testdata
-    tau, cause = [0, 3.2, 10, 10.1, 20.1], 1
-    expected = [
-        [0.0000, 0.0000, 0.2679, 0.2679, 0.4386],
-        [0.0000, 0.0000, 0.0811, 0.0811, 0.3567],
-        [0.0000, 0.0000, -0.0245, -0.0245, 0.3688],
-        [0.0000, 0.0000, -0.0245, -0.0245, 0.2269],
-        [0.0000, 0.0000, -0.0245, -0.0245, 0.3398],
-        [0.0000, 0.0000, -0.0245, -0.0245, -0.5069],
-        [0.0000, 1.0000, 1.0000, 1.0000, 1.0000],
-        [0.0000, 1.0000, 1.0000, 1.0000, 1.0000],
-        [0.0000, 0.0000, 1.0407, 1.0407, 1.0312],
-        [0.0000, 0.0000, 1.0407, 1.0407, 1.0312],
-        [0.0000, 0.0000, 1.0407, 1.0407, 1.0312],
-        [0.0000, 0.0000, 1.0407, 1.0407, 1.0312],
-        [0.0000, 0.0000, 1.1366, 1.1366, 1.0986],
-        [0.0000, 0.0000, -0.0245, -0.0245, 1.2203],
-        [0.0000, 0.0000, -0.0245, -0.0245, 2.0331],
-        [0.0000, 0.0000, -0.0245, -0.0245, -0.5069],
-        [0.0000, 0.0000, 0.0000, 0.0000, 0.0000],
-        [0.0000, 0.0000, 0.0000, 0.0000, 0.0000],
-        [0.0000, 0.0000, -0.0149, -0.0149, -0.0244],
-        [0.0000, 0.0000, -0.0149, -0.0149, -0.0244],
-        [0.0000, 0.0000, -0.0149, -0.0149, -0.0244],
-        [0.0000, 0.0000, -0.0245, -0.0245, -0.0625],
-        [0.0000, 0.0000, -0.0245, -0.0245, -0.0625],
-        [0.0000, 0.0000, -0.0245, -0.0245, -0.2247],
-    ]
-    cic_pseudo = _cic_pv(time, event, np.asarray(tau))[..., cause - 1]
-    assert cic_pseudo == pytest.approx(np.asarray(expected), abs=1e-4)
+from discotime.metrics import BrierScore
+from discotime.utils import AalenJohansen, KaplanMeier
 
 
-@pytest.mark.parametrize(
-    ("cause", "timepoint", "expected"),
-    [
-        (1, [8.67], [0.192]),
-        (1, [15.77, 1.77], [0.04, 0.231]),
-        (1, [20.4, 2.57, 11.95, 12.85], [0.04, 0.231, 0.231, 0.249]),
-        (1, [8.71], [0.192]),
-        (1, [16.41, 20.18], [0.231, 0.247]),
-        (2, [21.84, 20.91, 18.83], [0.235, 0.235, 0.235]),
-        (2, [20.31, 12.49, 2.92, 0.56], [0, 0.076, 0.235, 0.235]),
-        (2, [23.38, 18.46, 15.24], [0.235, 0.235, 0.235]),
-    ],
+@given(
+    tau=st.lists(st.floats(min_value=0, max_value=3.1999), min_size=1),
 )
-def test_brier_score_null(timepoint, cause, expected, comprisk_testdata):
-    """Expected values obtained using the `riskRegression` R package.
+def test_brier_score_1(tau, survival_data_2):
+    """Before any event occurs (t=0.7) the following is true:
 
-    ```{r}
-    cfit <- CSC(Hist(t, e) ~ 1, cause = _, data = data)
-    Score(list(cfit), formula=Hist(t, e) ~ 1, data=data, times=c(...), cause=_)
-    ```
+    - An estimate of 100% gives a brier score of 0
+    - An estimate of 0% gives a brier score of 1
+    - An estimate of 50% gives a brier score of 0.25
+
     """
-    t, e = comprisk_testdata
-    timepoint = np.sort(timepoint)
+    time, event = survival_data_2
+    brier_score = BrierScore(survival_train=(time, event))
 
-    brier_score_null, _ = BrierScore(timepoint, [cause])(None, t, e)
-    assert brier_score_null == pytest.approx(expected, abs=1e-3)
+    all_ones = torch.ones((len(time), len(tau), 2))
+    all_zeros = torch.zeros_like(all_ones)
+    all_half = torch.full_like(all_ones, 0.5)
+
+    brier_score(all_ones, tau, survival_data_2)
+    assert torch.all(brier_score(all_ones, tau, (time, event)) == 0)
+    assert torch.all(brier_score(all_zeros, tau, (time, event)) == 1)
+    assert torch.all(brier_score(all_half, tau, (time, event)) == 0.25)
 
 
-def test_index_of_prediction_accuracy():
-    timepoints = np.arange(5, dtype=np.float64)
+def brier_score_nested(estimates, timepoints, survival_test):
+    """Implementation of the Brier score using nested for loops.
 
-    time = np.repeat(timepoints, repeats=3)
-    event = np.tile(np.arange(3, dtype=np.int64), reps=5)
-    phi = np.zeros((time.size, timepoints.size, 2))
+    Relatively inefficient, but the code is easier to read than the one relying
+    on torch broadcasting rules. This implementation should give the same
+    result as the vectorized one, otherwise a bug/error have been introduced
+    somewhere - most likely in the "efficient" version.
+    """
+    time, event = map(torch.as_tensor, survival_test)
+    S = torch.as_tensor(estimates)
 
-    bs = BrierScore(timepoints)
-    bs_n, bs_m = bs(phi, time, event)
-    ipa_0 = (1 / 4) * np.trapz(1 - (bs_m / bs_n), timepoints, axis=0)
+    GTi = torch.clamp(KaplanMeier(time, event == 0)(time), 0.001)
+    Gti = torch.clamp(KaplanMeier(time, event == 0)(timepoints), 0.001)
 
-    ipa_1 = IPA(timepoints, integrate=True)(phi, time, event)
+    out = torch.zeros_like(S)
+    for i, (Ti, di) in enumerate(zip(time, event)):
+        for j, t in enumerate(timepoints):
+            for k in range(S.shape[-1]):
+                surv = S[i][j][k]
+                p1 = (surv**2 * ((Ti <= t) & (di == k + 1))) / GTi[i]
+                p2 = ((1 - surv) ** 2 * ((Ti <= t) & (di != k + 1))) / GTi[i]
+                p3 = ((1 - surv) ** 2 * (Ti > t)) / Gti[j]
+                out[i, j, k] = p1 + p2 + p3
 
-    assert all(ipa_0 == ipa_1)
+    return torch.mean(out, dim=0)
+
+
+@given(
+    tau=st.lists(st.floats(min_value=0, max_value=24.3), min_size=1),
+    est=st.floats(min_value=0, max_value=1),
+)
+def test_brier_score_2(tau, est, survival_data_2):
+    time, event = survival_data_2
+    brier_score = BrierScore(survival_train=(time, event))
+    phi = torch.full((len(time), len(tau), 2), est)
+
+    # the discotime-packaged implementation
+    brier_score_discotime = brier_score(
+        estimates=phi,
+        timepoints=tau,
+        survival_test=(time, event),
+    )
+
+    assert brier_score_discotime.shape == phi.shape[1:]
+    assert torch.all(
+        (0 <= brier_score_discotime) & (brier_score_discotime <= 1)
+    )
+
+    # the stupid implementation relying on nested for-loops
+    brier_score_naive = brier_score_nested(
+        estimates=phi,
+        timepoints=tau,
+        survival_test=(time, event),
+    )
+
+    assert torch.all(brier_score_discotime == brier_score_naive)

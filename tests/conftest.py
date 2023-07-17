@@ -1,9 +1,19 @@
 import pytest
-import numpy as np
 
 
 @pytest.fixture(scope="session")
-def comprisk_testdata():
+def survival_data_1():
+    """Example data from p. 18 in Kleinbaum & Klein (2005)"""
+    data = {
+        1: [6, 6, 6, 7, 10, 13, 16, 22, 23],
+        0: [6, 9, 10, 11, 17, 19, 20, 25, 32, 32, 34, 35],
+    }
+    time, event = zip(*[(t, e) for (e, ts) in data.items() for t in ts])
+    return (time, event)
+
+
+@pytest.fixture(scope="session")
+def survival_data_2():
     """Example data from Chap. 9 in Kleinbaum & Klein (2005)."""
 
     # [[censored], [cause_1], [cause_2]]
@@ -15,5 +25,4 @@ def comprisk_testdata():
     time, event = zip(
         *[(v, i) for (i, times) in enumerate(data) for v in times]
     )
-    time, event = map(np.asarray, (time, event))
     return (time, event)

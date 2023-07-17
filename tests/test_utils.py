@@ -58,8 +58,8 @@ def test_kaplan_meier_percentiles_unobserved(km_estimator):
 
 
 @pytest.fixture
-def cic(comprisk_testdata):
-    time, event = comprisk_testdata
+def cic(survival_data_2):
+    time, event = survival_data_2
     return AalenJohansen(time, event)
 
 
