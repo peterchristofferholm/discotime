@@ -1,8 +1,8 @@
 import torch
-from hypothesis import given
+from hypothesis import given, example
 from hypothesis import strategies as st
 
-from discotime.metrics import BrierScore
+from discotime.metrics import BrierScore, BrierScoreScaled
 from discotime.utils import AalenJohansen, KaplanMeier
 
 
@@ -86,3 +86,52 @@ def test_brier_score_2(tau, est, survival_data_2):
     )
 
     assert torch.all(brier_score_discotime == brier_score_naive)
+
+
+@given(
+    tau=st.lists(st.floats(min_value=0, max_value=24.3), min_size=1),
+    est=st.floats(min_value=0, max_value=1),
+)
+def test_brier_score_3(tau, est, survival_data_2):
+    """
+    Guessing the incidence using the AalenJohansen estimator should be at least
+    as good as any random constant guess.
+    """
+    time, event = survival_data_2
+    brier_score = BrierScore(survival_train=(time, event))
+
+    phi_test = torch.full((len(time), len(tau), 2), est)
+    phi_null = AalenJohansen(time, event)(tau)
+    phi_null = 1 - torch.as_tensor(phi_null).view(1, -1, 2).expand_as(phi_test)
+
+    get_score = lambda x: brier_score(x, tau, (time, event))
+
+    assert torch.all(get_score(phi_null).mean() <= get_score(phi_test).mean())
+
+
+@given(
+    tau=st.lists(st.floats(0, 50), min_size=2, unique=True),
+    est=st.floats(0, 1),
+    integrate=st.booleans(),
+)
+@example(
+    tau=[0.0, 3.503246160812043e-46],
+    est=0.0,
+    integrate=True,
+)
+def test_brier_score_scaled_1(tau, est, integrate, survival_data_2):
+    tau = sorted(tau)
+    time, event = survival_data_2
+    brier_score_scaled = BrierScoreScaled(
+        survival_train=(time, event), integrate=integrate
+    )
+    phi = torch.full((len(time), len(tau), 2), est)
+    bss = brier_score_scaled(phi, tau, survival_data_2)
+
+    expected_ndim = 1 if integrate else 2
+    assert bss.ndim == expected_ndim
+
+    expected_shape = (2,) if integrate else (len(tau), 2)
+    assert bss.shape == expected_shape
+
+    assert torch.all(bss <= 1)

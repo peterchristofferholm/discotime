@@ -1,6 +1,8 @@
-from typing import TypeVar
+from typing import Any, TypeVar
+from itertools import pairwise
+
 import torch
-from discotime.utils import KaplanMeier
+from discotime.utils import KaplanMeier, AalenJohansen
 
 TensorLike = TypeVar("TensorLike")
 
@@ -87,3 +89,56 @@ class BrierScore:
         results += I3 * (1 - St) ** 2 / Gt
 
         return torch.mean(results, dim=0)
+
+
+class BrierScoreScaled:
+    def __init__(
+        self,
+        survival_train: tuple[TensorLike, TensorLike],
+        integrate: bool = False,
+    ) -> None:
+        self.brier_score = BrierScore(survival_train=survival_train)
+        self.integrate = integrate
+
+    def __call__(
+        self,
+        estimates: TensorLike,
+        timepoints: TensorLike,
+        survival_test: tuple[TensorLike, TensorLike],
+    ) -> torch.Tensor:
+        if len({*timepoints}) != len(timepoints):
+            raise ValueError("values in `timepoints` are not unique")
+
+        if not all(a < b for a, b in pairwise(timepoints)):
+            raise ValueError("values in `timepoints` are not sorted")
+
+        if self.integrate and len(timepoints) == 1:
+            raise ValueError(
+                "at least two values in `timepoints` are required when "
+                "self.integrate = True"
+            )
+
+        tau = torch.as_tensor(timepoints)
+
+        phi_test = torch.as_tensor(estimates)
+        n_causes = phi_test.shape[-1]
+
+        futime, status = survival_test
+        futime = torch.as_tensor(futime).squeeze()
+        status = torch.as_tensor(status).squeeze()
+
+        cic = 1 - AalenJohansen(futime, status, n_causes)(tau)
+        phi_null = cic.unsqueeze(0).expand_as(phi_test)
+
+        bs_test = self.brier_score(phi_test, timepoints, survival_test)
+        bs_null = self.brier_score(phi_null, timepoints, survival_test)
+
+        if self.integrate:
+            bs_null = torch.trapezoid(bs_null, tau.view(-1, 1), dim=0)
+            bs_test = torch.trapezoid(bs_test, tau.view(-1, 1), dim=0)
+
+        # avoid zero division
+        bs_test[bs_null == 0] += 1e-10
+        bs_null[bs_null == 0] += 1e-10
+
+        return 1 - bs_test / bs_null
