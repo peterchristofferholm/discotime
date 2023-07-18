@@ -158,80 +158,76 @@ class KaplanMeier:
         return Interpolate2D(1 - self._sj, self._tj, oob="clip")(1 - p)
 
 
-def _tabulate(a, v, side="left"):
-    """Count interval occurences.
-
-    As an example, if side="left" and a=[1, 2, 3], then intervals are
-    (-inf, 1), [1, 2), [2, 3) and [3, inf)
-
-    Example:
-        >>> a, v = np.array([1, 2, 3]), np.array([0.5, 1, 2.5, 4])
-        >>> _tabulate(a, v)
-        array([2, 0, 1, 1])
-    """
-    return np.bincount(np.searchsorted(a, v, side=side))
-
-
 class AalenJohansen:
     """Obtain cumulative incidence curves with the Aalen-Johansen method.
 
     Args:
         time: event times
         event: event indicator (0/1/../c) with 0=censored
-        n_causes: how many causes should be included? If None (the default)
-            then all observed causes are include.
     """
 
+    @torch.no_grad()
     def __init__(
         self,
-        time: npt.ArrayLike,
-        event: npt.ArrayLike,
-        n_causes: Optional[Int] = None,
+        time: TensorLike,
+        event: TensorLike,
+        n_causes: Optional[int] = None,
     ) -> None:
-        time, event = map(np.asarray, (time, event))
+        _time = torch.as_tensor(time).squeeze()
+        _event = torch.as_tensor(event).squeeze()
 
-        if time.ndim != 1:
-            raise ValueError(f"`time` is a {time.ndim}D array.")
+        if _event.ndim > 1 or _time.ndim > 1:
+            raise ValueError("`time` and `event` should be 1D tensors")
 
-        if event.ndim != 1:
-            raise ValueError(f"`event` is a {event.ndim}D array.")
+        if _event.unique().shape < (2,):
+            raise ValueError("there are less than 2 unique values in `event`")
 
-        order = np.argsort(time)
-        time, event = time[order], event[order]
+        idx = torch.argsort(_time)
+        _time, _event = _time[idx], _event[idx]
 
-        # find unique event times and add t=0 if it isn't present
-        tj = np.unique(np.pad(time, (1, 0)))
+        # observed event times, which is guaranteed to include zero
+        tj = torch.cat((torch.tensor([0]), _time)).unique()
 
-        # number at risk at the start of each interval
-        nj = time.size - np.cumsum(_tabulate(tj, time, side="right"))
-        nj = nj[:-1]  # drop last
+        # nj is the number at risk at each of the intervals in tj
+        qj = torch.bincount(torch.searchsorted(tj, _time) + 1)[:-1]
+        nj = len(_time) - torch.cumsum(qj, dim=0)
 
-        def _pad(a):
-            """Add zeros to end of array to ensure it has same size as `tj`"""
-            assert (tj.size - a.size) >= 0
-            return np.pad(a, (0, tj.size - a.size), constant_values=0)
-
-        # number lost in each interval to any cause
-        mj = _pad(_tabulate(tj, time[event != 0]))
+        # mj is the number lost to any cause at each interval
+        mj = torch.bincount(
+            torch.searchsorted(tj, _time[_event != 0]), minlength=len(tj)
+        )
 
         # lagged survival which starts with P(0) = 1
-        sj = np.cumprod((nj - mj) / nj)[:-1]
-        sj = np.pad(sj, (1, 0), constant_values=1)
+        sj = torch.cumprod((nj - mj) / nj, dim=0).roll(1)
+        sj[0] = 1
 
         # cause-specific incidences
-        n_risks = n_causes if n_causes else np.max(event)
-        ci = np.zeros((tj.size, n_risks))
+        n_risks = n_causes if n_causes else torch.max(_event)
+        ci = torch.zeros((len(tj), n_risks))
         for e in range(1, n_risks + 1):
-            mcj = _pad(_tabulate(tj, time[event == e]))
-            ci[:, e - 1] = np.cumsum(sj * (mcj / nj))
+            te = _time[_event == e]
+            mcj = torch.bincount(torch.searchsorted(tj, te), minlength=len(tj))
+            ci[:, e - 1] = torch.cumsum(sj * (mcj / nj), dim=0)
 
         self._tj = tj
         self._sj = sj
         self._ci = ci
 
-    def __call__(self, timepoints: npt.ArrayLike) -> npt.NDArray[np.float64]:
-        """Return cause-specific cumulative incidence at given timepoints."""
-        tau = np.asanyarray(timepoints).reshape(-1)
-        idx = np.searchsorted(self._tj, tau, side="right")
-        idx = np.clip(idx - 1, a_min=0, a_max=(self._tj.size - 1))
-        return self._ci[idx]
+    @torch.no_grad()
+    def __call__(self, time: TensorLike) -> torch.Tensor:
+        """Obtain Kaplan-Meier estimates for each timepoint.
+
+        Args:
+            time (num | seq[num]): `t`'s for which `km(t)` will be returned.
+        """
+
+        _time = torch.as_tensor(time).squeeze()
+
+        if _time.ndim > 1:
+            raise ValueError("`time` is not a 1D tensor")
+
+        if torch.any(_time < 0):
+            raise ValueError("can not understand negative values in `time`")
+
+        idx = torch.searchsorted(self._tj, _time, side="right") - 1
+        return torch.atleast_1d(self._ci[idx])

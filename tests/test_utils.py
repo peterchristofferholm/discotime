@@ -53,8 +53,7 @@ def test_kaplan_meier_percentiles_unobserved(km_estimator):
     assert km_estimator.percentile(p_min - 0.05) == t_max
 
 
-###############################################################################
-# Aalen-Johansen estimator
+### AalenJohansen #############################################################
 
 
 @pytest.fixture
@@ -67,11 +66,11 @@ def cic(survival_data_2):
     ("timepoint", "cause", "expected"),
     [
         # fmt: off
-       # expected obtained with `prodlim` package in R
-       ([10.7, 10.8, 10.9], 1, [0.3066, 0.3613, 0.3613]),
-       ([ 0.0,  0.6,  0.7], 1, [0.0000, 0.0000, 0.0416]),
-       ([ 0.0,  0.6,  0.7], 2, [0.0000, 0.0000, 0.0000]),
-       ([17.1, 20.3, 24.4], 1, [0.4488, 0.5362, 0.5362]),
+        # expected obtained with `prodlim` package in R
+        ([10.7, 10.8, 10.9], 1, [0.3066, 0.3613, 0.3613]),
+        ([ 0.0,  0.6,  0.7], 1, [0.0000, 0.0000, 0.0416]),
+        ([ 0.0,  0.6,  0.7], 2, [0.0000, 0.0000, 0.0000]),
+        ([17.1, 20.3, 24.4], 1, [0.4488, 0.5362, 0.5362]),
         # fmt: on
     ],
 )
