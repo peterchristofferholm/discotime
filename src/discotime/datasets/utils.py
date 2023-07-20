@@ -80,7 +80,8 @@ class SurvDataset(Dataset):
         )
 
     def __iter__(self):
-        return self
+        for i in range(len(self)):
+            yield self[i]
 
 
 ###############################################################################
