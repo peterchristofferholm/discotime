@@ -1,4 +1,4 @@
-name: Discotime Actions
+name: push actions
 
 on: 
   push: 
