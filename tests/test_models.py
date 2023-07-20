@@ -1,6 +1,8 @@
 import pytest
 from pytest import approx
 from warnings import filterwarnings
+
+from lightning import Trainer
 import torch
 import torch.nn.functional as F
 
@@ -58,3 +60,27 @@ def test_epoch_loss_batch_averaging():
             return sum(losses) / len(dataset.dset_train)
 
     assert get_epoch_loss(mgus_bs30) == approx(get_epoch_loss(mgus_bs60))
+
+
+def test_model_output_shape():
+    filterwarnings("ignore", message=".*`self.log")
+    model = LitSurvModule(ModelConfig())
+    model.datamodule = Mgus2(
+        DataConfig(
+            batch_size=60,
+            n_time_bins=20,
+            discretization_scheme="number",
+        )
+    )
+    model.datamodule.setup(stage="fit")
+    model.setup(stage="fit")
+
+    X = torch.vstack(
+        [torch.tensor(d.features) for d in model.datamodule.dset_fit]
+    )
+
+    n_obs, n_time_bins, n_risks = X.shape[0], model.n_time_bins, model.n_risks
+
+    assert model(X).shape == (n_obs, n_time_bins, n_risks + 1)
+    assert model.predict_step(X, 0).shape == (n_obs, n_time_bins, n_risks + 1)
+    assert model._predict_estimates(X, [2, 3]).shape == (n_obs, 2, n_risks)

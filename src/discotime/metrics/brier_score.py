@@ -1,135 +1,175 @@
-from typing import Optional, TypeVar
-from collections import namedtuple
+from typing import TypeVar
+from itertools import pairwise
 
-import numpy as np
-import numpy.typing as npt
-from numpy.typing import NDArray
+import torch
+from discotime.utils import AalenJohansen, IPCW
 
-from discotime.utils.estimators import AalenJohansen
-
-T_co = TypeVar("T_co", bound=np.generic, covariant=True)
-
-Int = int | np.int_
-Num = Int | float | np.float_
-
-
-def _loo_idx(m: int) -> npt.NDArray[np.int64]:
-    """Create indices for leave-one-out resampling.
-
-    Example:
-        >>> _loo_idx(4)
-        array([[1, 2, 3],
-               [0, 2, 3],
-               [0, 1, 3],
-               [0, 1, 2]])
-    """
-    return np.arange(1, m, dtype=np.int64) - np.tri(m, m - 1, k=-1, dtype=bool)
-
-
-def _cic_pv(
-    time: npt.NDArray[np.float_],
-    event: npt.NDArray[np.int_],
-    tau: npt.ArrayLike,
-) -> NDArray[np.float64]:
-    """Obtain jackknife pseudovalues from the marginal Aalen-Johansen estimate.
-
-    Example:
-        >>> rng = np.random.default_rng()
-        >>> time, event = rng.weibull(5., size=100), rng.integers(3, size=100)
-        >>> aj = _cic_pv(time, event, tau=[0.5, 3, 4])
-        >>> aj.shape
-        (100, 3, 2)
-    """
-    N = time.size
-    tau = np.asarray(tau, np.float_)
-
-    n_causes = np.max(event)
-    cumulative_incidence = AalenJohansen(time, event, n_causes)(tau)
-    cumulative_incidence_loo = np.array(
-        [AalenJohansen(time[i], event[i], n_causes)(tau) for i in _loo_idx(N)]
-    )
-    return (N * cumulative_incidence) - ((N - 1) * cumulative_incidence_loo)
+TensorLike = TypeVar("TensorLike")
 
 
 class BrierScore:
     """Brier score of survival model with right-censored data.
 
-    In the case of right-censored data, possibly unknown time-dependent event
-    status can be replaced with jackknife pseudovalues from the marginal
-    Aalen-Johansen estimates [1].
-
     Args:
-        timepoints: sequence of `t` timepoints to evaluate.
-        causes: causes for which the brier score is calculated.
-
-    Refs:
-        [1] Cortese, Giuliana, Thomas A. Gerds, and Per K. Andersen. "Comparing
-        predictions among competing risks models with time‐dependent
-        covariates." Statistics in medicine 32.18 (2013): 3089-3101.
+        survival_train: sequence of `t` timepoints to evaluate.
     """
 
-    Results = namedtuple("Results", ["null", "model"])
+    @torch.no_grad()
+    def __init__(self, survival_train: tuple[TensorLike, TensorLike]) -> None:
+        futime, status = survival_train
+        futime = torch.as_tensor(futime).squeeze()
+        status = torch.as_tensor(status).squeeze()
 
-    def __init__(
-        self, timepoints: npt.ArrayLike, causes: Optional[list[int]] = None
-    ) -> None:
-        if causes is not None and 0 in causes:
-            raise ValueError("cause 0 is censoring and cannot be included.")
-        self.timepoints = np.asanyarray(timepoints)
-        self.causes = causes
+        if futime.ndim > 1 or status.ndim > 1:
+            raise ValueError("`futime` and `status` should be 1D tensors")
 
-    @staticmethod
-    def _brier_score(label, estimate) -> NDArray[T_co]:
-        estimate = np.asanyarray(estimate)
-        score = label * (1 - (2 * estimate)) + np.square(estimate)
-        return np.atleast_1d(np.mean(score, axis=0))
+        self.ipcw = IPCW(futime, status)
 
+    @torch.no_grad()
     def __call__(
         self,
-        estimates: Optional[NDArray[T_co]],
-        time: npt.ArrayLike,
-        event: npt.ArrayLike,
-    ) -> Results:
+        estimates: TensorLike,
+        timepoints: TensorLike,
+        survival_test: tuple[TensorLike, TensorLike],
+    ) -> torch.Tensor:
         """Calculate Brier score of survival model.
-
-        Also includes the Brier score of a null-model based on the cumulative
-        incidence curve obtained with the Aalen-Johansen estimator.
 
         Args:
             estimates: an array with shape (`m`, `t`, `e`), where `m` is the
                 batch size, `t` is the number of time bins, and `e` is number
                 of competing causes/risks.
-            time: survival time.
-            event: event indicator with event=0 defined censoring.
+            timepoints: array of timepoints with size `t` at which the
+                values in `estimates` are obtained.
+            survival_test: tuple of observed time/event data.
         """
-        time, event = np.asanyarray(time), np.asanyarray(event)
 
-        if not np.issubdtype(event.dtype, np.integer):
-            raise TypeError("`event` can only be of integer type.")
+        St = torch.as_tensor(estimates)
+        n_obs, n_time, n_risks = St.shape
 
-        # check dimensionality of input arrays
-        if time.ndim != 1:
-            raise ValueError(f"`time` is a {time.ndim}D array.")
-        if event.ndim != 1:
-            raise ValueError(f"`event` is a {event.ndim}D array.")
+        tau = torch.as_tensor(timepoints)
+        if len(tau) != n_time:
+            raise ValueError(
+                "size of `timepoints` do not match dim 1 of estimates."
+            )
 
-        # use all available causes if none is specified
-        if self.causes is None:
-            causes = np.trim_zeros(np.unique(event))
-        else:
-            causes = np.asanyarray(self.causes)
+        futime, status = survival_test
+        futime = torch.as_tensor(futime).squeeze()
+        status = torch.as_tensor(status).squeeze()
 
-        # obtain jack-knife pseudovalues
-        cic_pv = _cic_pv(time, event, self.timepoints)[..., causes - 1]
+        if futime.ndim > 1 or status.ndim > 1:
+            raise ValueError("`futime` and `status` should be 1D tensors")
 
-        # the null model is the cic from the AalenJohansen estimator
-        p_null = AalenJohansen(time, event)(self.timepoints)[..., causes - 1]
-        bs_null: npt.NDArray[np.float32] = self._brier_score(cic_pv, p_null)
+        if len(futime) != n_obs:
+            raise ValueError("length of `futime` is not equal to batch size.")
 
-        # calculate brier score on the model estimates
-        if estimates is not None:
-            bs_model = self._brier_score(cic_pv, estimates[..., causes - 1])  # type: ignore
-        else:
-            bs_model = None
+        if len(status) != n_obs:
+            raise ValueError("length of `status` is not equal to batch size.")
 
-        return self.Results(null=bs_null, model=bs_model)
+        # has individual experienced event of interest yet?
+        I1 = torch.logical_and(
+            futime.view(-1, 1, 1) <= tau.view(1, -1, 1),
+            status.view(-1, 1, 1) == torch.arange(1, n_risks + 1),
+        )
+        # ... did something else happen?
+        # fmt: off
+        I2 = (
+            (futime.view(-1, 1, 1) <= tau.view(1, -1, 1))
+            .logical_and(status.view(-1, 1, 1) != torch.zeros_like(I1))
+            .logical_and(status.view(-1, 1, 1) != torch.arange(1, n_risks + 1))
+        )
+        # fmt: on
+        # ... or is individual still in the risk set?
+        I3 = futime.view(-1, 1, 1) > tau.view(1, -1, 1)
+
+        # The IPCW is clamped such that one individual is not "dominating" the
+        # score. see Kvamme & Borgan. "The Brier Score under Administrative
+        # Censoring: Problems and a Solution."
+        Gt = torch.clamp(self.ipcw(tau, lag=0).reshape(1, -1, 1), min=1e-4)
+        GTi = torch.clamp(self.ipcw(futime, lag=1).reshape(-1, 1, 1), min=1e-4)
+
+        results = I1 * (1 - St) ** 2 / GTi
+        results += I2 * (St**2) / GTi
+        results += I3 * (St**2) / Gt
+
+        return torch.mean(results, dim=0)
+
+
+class BrierScoreScaled:
+    """Index of prediction accuracy (IPA) for right-censored survival models.
+
+    In the context of survival analysis, the IPA is also known as the Brier
+    skill score (BSS).
+    """
+
+    @torch.no_grad()
+    def __init__(
+        self,
+        survival_train: tuple[TensorLike, TensorLike],
+        eval_grid: TensorLike,
+        integrate: bool = False,
+    ) -> None:
+        """
+        Args:
+            timepoints: sequence of `t` timepoints to evaluate.
+            causes: causes for which the brier score is calculated.
+            integrate: should the time-dependent IPA be integrated?
+                (default: True)
+        """
+        eval_grid = torch.as_tensor(eval_grid)
+
+        if len({*eval_grid}) != len(eval_grid):
+            raise ValueError("values in `timepoints` are not unique")
+
+        if not all(a <= b for a, b in pairwise(eval_grid)):
+            raise ValueError("values in `timepoints` are not sorted")
+
+        if integrate and len(eval_grid) == 1:
+            raise ValueError(
+                "at least two values in `timepoints` are required when "
+                "self.integrate = True"
+            )
+
+        self.brier_score = BrierScore(survival_train=survival_train)
+        self.eval_grid = eval_grid
+        self.integrate = integrate
+
+    @torch.no_grad()
+    def __call__(
+        self,
+        estimates: TensorLike,
+        survival_test: tuple[TensorLike, TensorLike],
+    ) -> torch.Tensor:
+        """Calculate the index of prediction accuracy.
+
+        Args:
+            estimates: array[batch, timepoints, cause]
+                model estimates of cause probabilities.
+            time: observed follow-up.
+            event: event indicator at time with 0 as censoring.
+
+        If there are multiple timepoints to consider, then the IPA is
+        numerically integrated using the trapezoidal method.
+        """
+        phi_test = torch.as_tensor(estimates)
+        n_causes = phi_test.shape[-1]
+        tau = self.eval_grid
+
+        futime, status = survival_test
+        futime = torch.as_tensor(futime).squeeze()
+        status = torch.as_tensor(status).squeeze()
+
+        cic = 1 - AalenJohansen(futime, status, n_causes)(tau)
+        phi_null = cic.unsqueeze(0).expand_as(phi_test)
+
+        bs_test = self.brier_score(phi_test, tau, survival_test)
+        bs_null = self.brier_score(phi_null, tau, survival_test)
+
+        if self.integrate:
+            bs_null = torch.trapezoid(bs_null, tau.view(-1, 1), dim=0)
+            bs_test = torch.trapezoid(bs_test, tau.view(-1, 1), dim=0)
+
+        # avoid zero division
+        bs_test[bs_null == 0] += 1e-10
+        bs_null[bs_null == 0] += 1e-10
+
+        return 1 - bs_test / bs_null
