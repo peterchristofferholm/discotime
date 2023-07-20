@@ -1,58 +1,119 @@
-import numpy as np
-import numpy.typing as npt
+import torch
 import pytest
+from hypothesis import given, example
+from hypothesis import strategies as st
 
-from discotime.metrics.brier_score import _cic_pv
-from discotime.metrics import BrierScore, IPA
+from discotime.metrics import BrierScore, BrierScoreScaled
+from discotime.utils import AalenJohansen, IPCW
 
 
-def test_cic_pseudovalues(comprisk_testdata):
-    """Test _cic_pseudovalues.
+@given(
+    tau=st.lists(st.floats(0, 0.699), min_size=1, max_size=100),
+)
+def test_brier_score_1(tau, survival_data_2):
+    """Before any event occurs (t=0.7) the following is true:
 
-    See if the implementation gives similar results to similar to jacknife
-    implementation provided by the `prodlim` package in R.
+    - An estimate of 100% gives a brier score of 1
+    - An estimate of 0% gives a brier score of 0
+    - An estimate of 50% gives a brier score of 0.25
 
-    The expected output is obtained like this:
-
-    ```{r}
-    pfit <- prodlim(Hist(time, status) ~ 1, data = data)
-    jackknife(pfit, times=c(0, 3.2, 10, 10.1, 20.1), cause=1)
-    ```
     """
-    time, event = comprisk_testdata
-    tau, cause = [0, 3.2, 10, 10.1, 20.1], 1
-    expected = [
-        [0.0000, 0.0000, 0.2679, 0.2679, 0.4386],
-        [0.0000, 0.0000, 0.0811, 0.0811, 0.3567],
-        [0.0000, 0.0000, -0.0245, -0.0245, 0.3688],
-        [0.0000, 0.0000, -0.0245, -0.0245, 0.2269],
-        [0.0000, 0.0000, -0.0245, -0.0245, 0.3398],
-        [0.0000, 0.0000, -0.0245, -0.0245, -0.5069],
-        [0.0000, 1.0000, 1.0000, 1.0000, 1.0000],
-        [0.0000, 1.0000, 1.0000, 1.0000, 1.0000],
-        [0.0000, 0.0000, 1.0407, 1.0407, 1.0312],
-        [0.0000, 0.0000, 1.0407, 1.0407, 1.0312],
-        [0.0000, 0.0000, 1.0407, 1.0407, 1.0312],
-        [0.0000, 0.0000, 1.0407, 1.0407, 1.0312],
-        [0.0000, 0.0000, 1.1366, 1.1366, 1.0986],
-        [0.0000, 0.0000, -0.0245, -0.0245, 1.2203],
-        [0.0000, 0.0000, -0.0245, -0.0245, 2.0331],
-        [0.0000, 0.0000, -0.0245, -0.0245, -0.5069],
-        [0.0000, 0.0000, 0.0000, 0.0000, 0.0000],
-        [0.0000, 0.0000, 0.0000, 0.0000, 0.0000],
-        [0.0000, 0.0000, -0.0149, -0.0149, -0.0244],
-        [0.0000, 0.0000, -0.0149, -0.0149, -0.0244],
-        [0.0000, 0.0000, -0.0149, -0.0149, -0.0244],
-        [0.0000, 0.0000, -0.0245, -0.0245, -0.0625],
-        [0.0000, 0.0000, -0.0245, -0.0245, -0.0625],
-        [0.0000, 0.0000, -0.0245, -0.0245, -0.2247],
-    ]
-    cic_pseudo = _cic_pv(time, event, np.asarray(tau))[..., cause - 1]
-    assert cic_pseudo == pytest.approx(np.asarray(expected), abs=1e-4)
+    time, event = survival_data_2
+    brier_score = BrierScore(survival_train=(time, event))
+
+    all_ones = torch.ones((len(time), len(tau), 2))
+    all_zeros = torch.zeros_like(all_ones)
+    all_half = torch.full_like(all_ones, 0.5)
+
+    assert torch.all(brier_score(all_ones, tau, (time, event)) == 1)
+    assert torch.all(brier_score(all_zeros, tau, (time, event)) == 0)
+    assert torch.all(brier_score(all_half, tau, (time, event)) == 0.25)
+
+
+def brier_score_nested(estimates, timepoints, survival_test):
+    """Implementation of the Brier score using nested for loops.
+
+    Relatively inefficient, but the code is easier to read than the one relying
+    on torch broadcasting rules. This implementation should give the same
+    result as the vectorized one, otherwise a bug/error have been introduced
+    somewhere - most likely in the "efficient" version.
+    """
+    futime, status = map(torch.as_tensor, survival_test)
+    tau = torch.as_tensor(timepoints)
+    St = torch.as_tensor(estimates)
+
+    Gt = IPCW(futime, status)(tau, lag=0)
+    GT = IPCW(futime, status)(futime, lag=1)
+
+    out = torch.zeros_like(St)
+    for i, (ti, s) in enumerate(zip(futime, status)):
+        for j, t in enumerate(tau):
+            for k in range(2):
+                p = St[i][j][k]
+                if ti <= t and s - 1 == k:
+                    out[i, j, k] = (1 - p) ** 2 / GT[i]
+                elif ti <= t and s != 0:
+                    out[i, j, k] = p**2 / GT[i]
+                elif ti > t:
+                    out[i, j, k] = p**2 / Gt[j]
+
+    return torch.mean(out, dim=0)
+
+
+@given(
+    tau=st.lists(st.floats(0, 24.3), min_size=1, max_size=100),
+    est=st.floats(0, 1),
+)
+def test_brier_score_2(tau, est, survival_data_2):
+    time, event = survival_data_2
+    brier_score = BrierScore(survival_train=(time, event))
+    phi = torch.full((len(time), len(tau), 2), est)
+
+    # the discotime-packaged implementation
+    brier_score_discotime = brier_score(
+        estimates=phi,
+        timepoints=tau,
+        survival_test=(time, event),
+    )
+
+    assert brier_score_discotime.shape == phi.shape[1:]
+    assert torch.all(
+        (0 <= brier_score_discotime) & (brier_score_discotime <= 1)
+    )
+
+    # the stupid implementation relying on nested for-loops
+    brier_score_naive = brier_score_nested(
+        estimates=phi,
+        timepoints=tau,
+        survival_test=(time, event),
+    )
+
+    assert torch.all(brier_score_discotime == brier_score_naive)
+
+
+@given(
+    tau=st.lists(st.floats(0, 24.3), min_size=1, max_size=10),
+    est=st.floats(0, 1),
+)
+def test_brier_score_3(tau, est, survival_data_2):
+    """
+    Guessing the incidence using the AalenJohansen estimator should be at least
+    as good as any random constant guess.
+    """
+    time, event = survival_data_2
+    brier_score = BrierScore(survival_train=(time, event))
+
+    phi_test = torch.full((len(time), len(tau), 2), est)
+    phi_null = AalenJohansen(time, event)(tau)
+    phi_null = torch.as_tensor(phi_null).view(1, -1, 2).expand_as(phi_test)
+
+    get_score = lambda x: brier_score(x, tau, (time, event))
+
+    assert torch.all(get_score(phi_null).mean() <= get_score(phi_test).mean())
 
 
 @pytest.mark.parametrize(
-    ("cause", "timepoint", "expected"),
+    ("cause", "tau", "expected"),
     [
         (1, [8.67], [0.192]),
         (1, [15.77, 1.77], [0.04, 0.231]),
@@ -64,7 +125,7 @@ def test_cic_pseudovalues(comprisk_testdata):
         (2, [23.38, 18.46, 15.24], [0.235, 0.235, 0.235]),
     ],
 )
-def test_brier_score_null(timepoint, cause, expected, comprisk_testdata):
+def test_brier_score_null(tau, cause, expected, survival_data_2):
     """Expected values obtained using the `riskRegression` R package.
 
     ```{r}
@@ -72,24 +133,44 @@ def test_brier_score_null(timepoint, cause, expected, comprisk_testdata):
     Score(list(cfit), formula=Hist(t, e) ~ 1, data=data, times=c(...), cause=_)
     ```
     """
-    t, e = comprisk_testdata
-    timepoint = np.sort(timepoint)
+    futime, status = survival_data_2
+    tau = sorted(tau)
 
-    brier_score_null, _ = BrierScore(timepoint, [cause])(None, t, e)
-    assert brier_score_null == pytest.approx(expected, abs=1e-3)
+    phi_null = AalenJohansen(futime, status)(tau)
+    phi_null = (
+        torch.as_tensor(phi_null)
+        .view(1, -1, 2)
+        .expand((len(futime), len(tau), 2))
+    )
+
+    brier_score = BrierScore(survival_train=(futime, status))
+    result = brier_score(phi_null, tau, (futime, status))[..., cause - 1]
+    assert result == pytest.approx(expected, abs=1e-3)
 
 
-def test_index_of_prediction_accuracy():
-    timepoints = np.arange(5, dtype=np.float64)
+@given(
+    tau=st.lists(st.floats(0, 50), min_size=2, unique=True),
+    est=st.floats(0, 1),
+    integrate=st.booleans(),
+)
+@example(
+    tau=[0.0, 3.503246160812043e-46],
+    est=0.0,
+    integrate=True,
+)
+def test_brier_score_scaled_1(tau, est, integrate, survival_data_2):
+    tau = sorted(tau)
+    time, event = survival_data_2
+    brier_score_scaled = BrierScoreScaled(
+        survival_train=(time, event), eval_grid=tau, integrate=integrate
+    )
+    phi = torch.full((len(time), len(tau), 2), est)
+    bss = brier_score_scaled(phi, survival_data_2)
 
-    time = np.repeat(timepoints, repeats=3)
-    event = np.tile(np.arange(3, dtype=np.int64), reps=5)
-    phi = np.zeros((time.size, timepoints.size, 2))
+    expected_ndim = 1 if integrate else 2
+    assert bss.ndim == expected_ndim
 
-    bs = BrierScore(timepoints)
-    bs_n, bs_m = bs(phi, time, event)
-    ipa_0 = (1 / 4) * np.trapz(1 - (bs_m / bs_n), timepoints, axis=0)
+    expected_shape = (2,) if integrate else (len(tau), 2)
+    assert bss.shape == expected_shape
 
-    ipa_1 = IPA(timepoints, integrate=True)(phi, time, event)
-
-    assert all(ipa_0 == ipa_1)
+    assert torch.all(bss <= 1)

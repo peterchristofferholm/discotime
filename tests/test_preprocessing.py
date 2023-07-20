@@ -35,26 +35,26 @@ def test_discretization_scheme_number():
 
 
 class TestLabTransDiscrete:
-    def test_interval_discretization(self, comprisk_testdata):
-        time, event = comprisk_testdata
+    def test_interval_discretization(self, survival_data_2):
+        time, event = survival_data_2
         ltd = LabelDiscretizer("interval", 10)
         dt, de = ltd.fit_transform(time, event)
         assert len(set(dt)) == 10
         assert len(set(np.round(np.diff(ltd.cuts), 4))) == 1
-        assert len(set(map(lambda x: x.size, (time, event, dt, de)))) == 1
+        assert len(set(map(lambda x: len(x), (time, event, dt, de)))) == 1
 
-    def test_quantile_discretization(self, comprisk_testdata):
-        time, event = comprisk_testdata
+    def test_quantile_discretization(self, survival_data_2):
+        time, event = survival_data_2
         ltd = LabelDiscretizer("number", 10)
         dt, de = ltd.fit_transform(time, event)
         assert len(set(dt)) == 10
         assert len(set(np.diff(ltd.cuts))) != 1
-        assert len(set(map(lambda x: x.size, (time, event, dt, de)))) == 1
+        assert len(set(map(lambda x: len(x), (time, event, dt, de)))) == 1
 
-    def test_manual_discretization(self, comprisk_testdata):
-        time, event = comprisk_testdata
+    def test_manual_discretization(self, survival_data_2):
+        time, event = survival_data_2
         ltd = LabelDiscretizer(cut_points=[0, 5, 10, 15])
         with pytest.warns(UserWarning, match="ignoring fit()"):
             dt, de = ltd.fit_transform(time, event)
         assert len(set(dt)) == 3
-        assert len(set(map(lambda x: x.size, (time, event, dt, de)))) == 1
+        assert len(set(map(lambda x: len(x), (time, event, dt, de)))) == 1

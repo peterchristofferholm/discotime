@@ -99,3 +99,4 @@ and a couple of different competing risk datasets.
    installation
    examples/00_mgus2-analysis
    reference/index
+   reference/modules

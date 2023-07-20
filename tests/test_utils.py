@@ -1,69 +1,80 @@
 import torch
 import pytest
+from pytest import approx
 import hypothesis
 import hypothesis.strategies as st
 from einops import repeat
 
-from discotime.utils import KaplanMeier, AalenJohansen, interpolate2d
+from discotime.utils import KaplanMeier, AalenJohansen, Interpolate2D, IPCW
 
-###############################################################################
-# Kaplan-Meier estimator
+### KaplanMeier ###############################################################
 
 
 @pytest.fixture
-def km_example():
+def km_estimator():
     """Example data from p. 18 in Kleinbaum & Klein (2005)"""
     data = {
         1: [6, 6, 6, 7, 10, 13, 16, 22, 23],
-        0: [6, 9, 10, 11, 17, 19, 20, 25, 32, 32, 34, 45],
+        0: [6, 9, 10, 11, 17, 19, 20, 25, 32, 32, 34, 35],
     }
-    event, time = zip(*[(e, t) for (e, ts) in data.items() for t in ts])
+    time, event = zip(*[(t, e) for (e, ts) in data.items() for t in ts])
     return KaplanMeier(time, event)
 
 
 @pytest.mark.parametrize(
     ("time", "expected"),
     [
-        # fmt: off
-        # single timepoints
-        ( 0, 1.0000),
-        ( 6, 0.8571),
-        (10, 0.7529),
-        (22, 0.5378),
-        # multiple timepoints
-        ([ 6,  7], [0.8571, 0.8067]),
-        ([10, 22], [0.7529, 0.5378]),
-        # fmt: on
+        ([0], [1]),
+        (0, [1]),
+        ([0, 0], [1, 1]),
+        (6, [0.8571]),
+        (22, [0.5378]),
+        ([6, 7], [0.8571, 0.8067]),
+        ([7, 6], [0.8067, 0.8571]),
     ],
 )
-def test_kaplan_meier_estimates(time, expected, km_example):
-    assert km_example(time) == pytest.approx(expected, abs=1e-4)
+def test_kaplan_meier_estimates(time, expected, km_estimator):
+    assert km_estimator(time) == pytest.approx(expected, abs=1e-4)
 
 
-def test_kaplan_meier_percentiles(km_example):
-    t = km_example.percentile(km_example._sj)
-    assert all(km_example(t) == km_example._sj)
+def test_kaplan_meier_percentiles(km_estimator):
+    t = km_estimator.percentile(km_estimator._sj)
+    assert all(km_estimator(t) == km_estimator._sj)
 
 
 @pytest.mark.parametrize("percentile", [-1.1, 1.1])
-def test_kaplan_meier_percentiles_errors(percentile, km_example):
+def test_kaplan_meier_percentiles_errors(percentile, km_estimator):
     with pytest.raises(ValueError):
-        km_example.percentile(percentile)
+        km_estimator.percentile(percentile)
 
 
 # km.percentile should stop giving unique timepoints if p < P(t_max)
-def test_kaplan_meier_percentiles_unobserved(km_example):
-    t_max, p_min = km_example._tj[-1], km_example._sj[-1]
-    assert km_example.percentile(p_min - 0.05) == t_max
+def test_kaplan_meier_percentiles_unobserved(km_estimator):
+    t_max, p_min = km_estimator._tj[-1], km_estimator._sj[-1]
+    assert km_estimator.percentile(p_min - 0.05) == t_max
 
 
-###############################################################################
-# Aalen-Johansen estimator
+### IPCW ######################################################################
+
+
+def test_ipcw_1(survival_data_2):
+    time = [t for t, e in zip(*survival_data_2) if e == 0]
+    ipcw = IPCW(*survival_data_2)
+
+    assert ipcw(time, lag=0) == approx(
+        [0.95, 0.87083, 0.76198, 0.63498, 0.47624, 0.0], abs=1e-5
+    )
+    assert ipcw(time, lag=1) == approx(
+        [1.0, 0.95, 0.87083, 0.76198, 0.63498, 0.47624], abs=1e-5
+    )
+
+
+### AalenJohansen #############################################################
 
 
 @pytest.fixture
-def cic(comprisk_testdata):
-    time, event = comprisk_testdata
+def cic(survival_data_2):
+    time, event = survival_data_2
     return AalenJohansen(time, event)
 
 
@@ -110,9 +121,9 @@ def test_interpolate2d_linear(args):
     hypothesis.assume(torch.unique(x).size() == x.size())
 
     yp = coef[0] * xp + coef[1]
-    yp = repeat(yp, "t -> b t r", b=10, r=2)
+    yp = repeat(yp, "t -> b r t", b=10, r=2)
 
     y = coef[0] * x + coef[1]
-    y = repeat(y, "t -> b t r", b=10, r=2)
+    y = repeat(y, "t -> b r t", b=10, r=2)
 
-    assert interpolate2d(x, xp, yp) == pytest.approx(y, abs=1e-3)
+    assert Interpolate2D(xp, yp)(x) == pytest.approx(y, abs=1e-3)

@@ -1,27 +1,79 @@
-from typing import Optional
-from collections.abc import Iterable
-
-import numpy as np
-import numpy.typing as npt
+from typing import Any, Optional, TypeVar
 import torch
-from einops import repeat
 
-Int = int | np.int_
-Num = Int | float | np.float_
+TensorLike = TypeVar("TensorLike")
+"Object that can be converted to a tensor"
 
 
-def _tabulate(a, v, side="left"):
-    """Count interval occurences.
+class Interpolate2D:
+    """Perform stepwise linear interpolation of a discrete function."""
 
-    As an example, if side="left" and a=[1, 2, 3], then intervals are
-    (-inf, 1), [1, 2), [2, 3) and [3, inf)
+    @torch.no_grad()
+    def __init__(
+        self, xs: TensorLike, ys: TensorLike, dim: int = -1, oob: str = "error"
+    ) -> None:
+        """Fit piecewise linear model.
 
-    Example:
-        >>> a, v = np.array([1, 2, 3]), np.array([0.5, 1, 2.5, 4])
-        >>> _tabulate(a, v)
-        array([2, 0, 1, 1])
-    """
-    return np.bincount(np.searchsorted(a, v, side=side))
+        Args:
+            xs (`Tensor`): an 1D tensor of real values
+            ys (`Tensor`): an ND tensor of real values. The length of `ys` on
+                the interpolation axis must have the same length as `xs`.
+            dim: along what axis should the interpolation be done?
+            oob: how should values in `x` to __call__ be handled if they're
+                outside the range of values in `xs` seen during fitting?
+                Possible values to `oob` are "error", "extrapolate" or "clip".
+        """
+
+        if oob not in (allowed := {"error", "clip", "extrapolate"}):
+            raise ValueError(f"{oob=} is not in {allowed}")
+
+        xs = torch.as_tensor(xs).squeeze()
+        ys = torch.as_tensor(ys)
+
+        assert xs.device == ys.device
+
+        if xs.ndim != 1:
+            raise ValueError("`xs` must be a 1D tensor.")
+
+        # put interpolation axis last
+        ys = torch.swapaxes(ys, -1, dim)
+
+        # obtain slopes and intercepts
+        self.m = torch.diff(ys) / torch.diff(xs)
+        self.b = ys[..., :-1] - (self.m * xs[:-1])
+
+        self.xs = xs
+        self.xrange = (torch.min(self.xs), torch.max(self.xs))
+        self.dim = dim
+        self.oob = oob
+
+    @torch.no_grad()
+    def __call__(self, xs: TensorLike) -> torch.Tensor:
+        xs = torch.as_tensor(xs).squeeze()
+        xs = torch.atleast_1d(xs)
+
+        if xs.ndim != 1:
+            raise ValueError("`xs` must be convertable to a 1D tensor.")
+
+        if (is_oob := (xs < self.xrange[0]) | (xs > self.xrange[1])).any():
+            if self.oob == "error":
+                raise ValueError(f"{xs[is_oob]} is outside the range  `xs`.")
+
+        if self.oob == "clip":
+            xs = torch.clamp(xs, *self.xrange)
+
+        # search self.xs to find what slope/intercept to use
+        idx = torch.searchsorted(self.xs, xs) - 1
+        idx[idx == -1] = 0
+
+        if self.oob == "extrapolate":
+            idx = torch.clamp(idx, min=0, max=self.m.shape[-1] - 1)
+
+        # calculate ys and swap interpolation axis back
+        ys = self.m[..., idx] * xs + self.b[..., idx]
+        ys = ys.swapaxes(self.dim, -1)
+
+        return ys
 
 
 class KaplanMeier:
@@ -34,54 +86,78 @@ class KaplanMeier:
     Example:
         >>> km = KaplanMeier(time=[0, 1.5, 1.3, 3], event=[0, 1, 0, 0])
         >>> km(0)
-        array([1.])
-        >>> km([0, 1.0, 1.1, 1.5])
-        array([1. , 1. , 1. , 0.5])
+        tensor([1.])
+        >>> km([0, 1.0, 1.1, 1.5, 5])
+        tensor([1.0000, 1.0000, 1.0000, 0.5000, 0.5000])
     """
 
-    def __init__(self, time: Iterable[Num], event: Iterable[Int]) -> None:
-        _time, _event = map(np.asarray, (time, event))
-        order = np.argsort(_time)
-        _time, _event = _time[order], _event[order]
+    @torch.no_grad()
+    def __init__(
+        self, time: TensorLike, event: TensorLike, lag: int = 0
+    ) -> None:
+        _time = torch.as_tensor(time).squeeze()
+        _event = torch.as_tensor(event).squeeze()
 
-        # observed event times
-        tj = np.unique(np.pad(_time[_event == 1], (1, 0)))
+        if _event.ndim > 1 or _time.ndim > 1:
+            raise ValueError("`time` and `event` should be 1D tensors")
 
-        def _pad(a):
-            return np.pad(a, (0, tj.size - a.size))
+        if _event.unique().shape > (2,):
+            raise ValueError("there are more than 2 unique values in `event`")
 
-        mj = _pad(_tabulate(tj, _time[_event == 1], side="right")[1:])
-        qj = _pad(_tabulate(tj, _time[_event == 0], side="right")[1:])
+        idx = torch.argsort(_time)
+        _time, _event = _time[idx], _event[idx]
 
-        nj = np.roll(_time.size - np.cumsum(mj + qj), 1)
-        nj[0] = _time.size
+        # observed event times, which is guaranteed to include zero
+        tj = torch.cat((torch.tensor([0]), _time[_event == 1])).unique()
 
-        self._sj = np.cumprod((nj - mj) / nj)
-        self._nj, self._tj, self._mj = nj, tj, mj
+        # count failure times
+        tjm = torch.searchsorted(tj, _time[_event == 1], side="right")
+        mj = torch.bincount(tjm, minlength=len(tj) + 1)[1:]
 
-    def __call__(self, time: Num | Iterable[Num]) -> npt.NDArray[np.float_]:
+        # count censoring times
+        tjq = torch.searchsorted(tj, _time[_event == 0], side="right")
+        qj = torch.bincount(tjq, minlength=len(tj) + 1)[1:]
+
+        nj = torch.roll(len(_time) - torch.cumsum(mj + qj, 0), 1)
+        nj[0] = len(_time)
+
+        # product limit formula
+        self._sj = torch.cumprod((nj - mj) / nj, 0)
+        self._tj, self._nj, self._mj = tj, nj, mj
+        self.lag = lag
+
+    @torch.no_grad()
+    def __call__(self, time: TensorLike) -> torch.Tensor:
         """Obtain Kaplan-Meier estimates for each timepoint.
 
         Args:
             time (num | seq[num]): `t`'s for which `km(t)` will be returned.
         """
-        _time = np.atleast_1d(np.asanyarray(time))
-        return self._sj[np.searchsorted(self._tj, _time, side="right") - 1]
 
-    def percentile(
-        self, p: Iterable[Num], dtype=np.float64
-    ) -> npt.NDArray[np.float_]:
+        _time = torch.as_tensor(time).squeeze()
+
+        if _time.ndim > 1:
+            raise ValueError("`time` is not a 1D tensor")
+
+        idx = torch.searchsorted(self._tj, _time, side="right") - 1 - self.lag
+        idx = torch.clamp(idx, 0, len(self._sj))
+        return torch.atleast_1d(self._sj[idx])
+
+    @torch.no_grad()
+    def percentile(self, p: TensorLike) -> torch.Tensor:
         """Obtain approximate timepoint t such that P(t) = p.
 
         The stepwise Kaplan-Meier estimator is piecewise linearly interpolated
         such that unique timepoints can be obtained.
         """
-        p = np.atleast_1d(np.asanyarray(p, dtype=dtype))
-        if not np.all((0 <= p) & (p <= 1)):
+        p = torch.atleast_1d(torch.as_tensor(p).squeeze())
+
+        if not torch.all((0 <= p) & (p <= 1)):
             raise ValueError(
-                "p is a probability and should be between 0 and 1"
+                "`p` is a probability and all values should be between 0 and 1"
             )
-        return np.interp(1 - p, 1 - self._sj, self._tj, left=0)
+
+        return Interpolate2D(1 - self._sj, self._tj, oob="clip")(1 - p)
 
 
 class AalenJohansen:
@@ -90,79 +166,118 @@ class AalenJohansen:
     Args:
         time: event times
         event: event indicator (0/1/../c) with 0=censored
-        n_causes: how many causes should be included? If None (the default)
-            then all observed causes are include.
     """
 
+    @torch.no_grad()
     def __init__(
         self,
-        time: npt.ArrayLike,
-        event: npt.ArrayLike,
-        n_causes: Optional[Int] = None,
+        time: TensorLike,
+        event: TensorLike,
+        n_causes: Optional[int] = None,
     ) -> None:
-        time, event = map(np.asarray, (time, event))
+        _time = torch.as_tensor(time).squeeze()
+        _event = torch.as_tensor(event).squeeze().int()
 
-        if time.ndim != 1:
-            raise ValueError(f"`time` is a {time.ndim}D array.")
+        if _event.ndim > 1 or _time.ndim > 1:
+            raise ValueError("`time` and `event` should be 1D tensors")
 
-        if event.ndim != 1:
-            raise ValueError(f"`event` is a {event.ndim}D array.")
+        if _event.unique().shape < (2,):
+            raise ValueError("there are less than 2 unique values in `event`")
 
-        order = np.argsort(time)
-        time, event = time[order], event[order]
+        idx = torch.argsort(_time)
+        _time, _event = _time[idx], _event[idx]
 
-        # find unique event times and add t=0 if it isn't present
-        tj = np.unique(np.pad(time, (1, 0)))
+        # observed event times, which is guaranteed to include zero
+        tj = torch.cat((torch.tensor([0]).to(_time), _time)).unique()
 
-        # number at risk at the start of each interval
-        nj = time.size - np.cumsum(_tabulate(tj, time, side="right"))
-        nj = nj[:-1]  # drop last
+        # nj is the number at risk at each of the intervals in tj
+        qj = torch.bincount(torch.searchsorted(tj, _time) + 1)[:-1]
+        nj = len(_time) - torch.cumsum(qj, dim=0)
 
-        def _pad(a):
-            """Add zeros to end of array to ensure it has same size as `tj`"""
-            assert (tj.size - a.size) >= 0
-            return np.pad(a, (0, tj.size - a.size), constant_values=0)
-
-        # number lost in each interval to any cause
-        mj = _pad(_tabulate(tj, time[event != 0]))
+        # mj is the number lost to any cause at each interval
+        mj = torch.bincount(
+            torch.searchsorted(tj, _time[_event != 0]), minlength=len(tj)
+        )
 
         # lagged survival which starts with P(0) = 1
-        sj = np.cumprod((nj - mj) / nj)[:-1]
-        sj = np.pad(sj, (1, 0), constant_values=1)
+        sj = torch.cumprod((nj - mj) / nj, dim=0).roll(1)
+        sj[0] = 1
+
+        n_risks = n_causes if n_causes else torch.max(_event).item()
+        assert isinstance(n_risks, int)  # type narrowing
 
         # cause-specific incidences
-        n_risks = n_causes if n_causes else np.max(event)
-        ci = np.zeros((tj.size, n_risks))
+        ci = torch.zeros((len(tj), n_risks)).to(tj)
         for e in range(1, n_risks + 1):
-            mcj = _pad(_tabulate(tj, time[event == e]))
-            ci[:, e - 1] = np.cumsum(sj * (mcj / nj))
+            te = _time[_event == e]
+            mcj = torch.bincount(torch.searchsorted(tj, te), minlength=len(tj))
+            ci[:, e - 1] = torch.cumsum(sj * (mcj / nj), dim=0)
 
         self._tj = tj
         self._sj = sj
         self._ci = ci
 
-    def __call__(self, timepoints: npt.ArrayLike) -> npt.NDArray[np.float64]:
-        """Return cause-specific cumulative incidence at given timepoints."""
-        tau = np.asanyarray(timepoints).reshape(-1)
-        idx = np.searchsorted(self._tj, tau, side="right")
-        idx = np.clip(idx - 1, a_min=0, a_max=(self._tj.size - 1))
-        return self._ci[idx]
+    @torch.no_grad()
+    def __call__(self, time: TensorLike) -> torch.Tensor:
+        """Obtain Kaplan-Meier estimates for each timepoint.
+
+        Args:
+            time (num | seq[num]): `t`'s for which `km(t)` will be returned.
+        """
+
+        _time = torch.as_tensor(time).squeeze().to(self._tj)
+
+        if _time.ndim > 1:
+            raise ValueError("`time` is not a 1D tensor")
+
+        if torch.any(_time < 0):
+            raise ValueError("can not understand negative values in `time`")
+
+        idx = torch.searchsorted(self._tj, _time, side="right") - 1
+        return torch.atleast_1d(self._ci[idx])
 
 
-def interpolate2d(x: torch.Tensor, xp: torch.Tensor, yp: torch.Tensor):
-    """Perform stepwise linear interpolation of a discrete function.
+class IPCW:
+    @torch.no_grad()
+    def __init__(self, time=TensorLike, event=TensorLike) -> None:
+        t = torch.as_tensor(time).squeeze()
+        e = torch.as_tensor(event).squeeze()
 
-    _xp_ and _yp_ are tensors of values used to approximate f: y = f(x). This
-    functions uses interpolation to find the value of new points x.
+        if e.ndim > 1 or e.ndim > 1:
+            raise ValueError("`time` and `event` should be 1D tensors")
 
-    Args:
-        x (:obj:`torch.Tensor`): an 1D tensor real values.
-        xp (:obj:`torch.Tensor`): an 1D tensor of real values.
-        yp (:obj:`torch.Tensor`): an ND tensor of real values. The length of yp
-            along the second axis (dim=1) must have the same length as xp.
-    """
-    x, xp = x.to(yp), xp.to(yp)  # move to same device
-    m = torch.diff(yp, dim=1) / repeat(torch.diff(xp, dim=0), "t -> 1 t 1")
-    b = yp[:, :-1, :] - torch.einsum("btr,t->btr", m, xp[:-1])
-    idx = torch.clamp_max(torch.searchsorted(xp, x), m.shape[1] - 1)
-    return m[:, idx, :] * repeat(x, "t -> 1 t 1") + b[:, idx, :]
+        idx = torch.argsort(t)
+        t, e = t[idx], e[idx]
+
+        # observed times
+        tj = torch.unique(torch.cat((torch.tensor([0]), t)))
+
+        mj = torch.bincount(
+            torch.searchsorted(tj, t[e == 0]), minlength=len(tj)
+        )
+        rj = torch.bincount(
+            torch.searchsorted(tj, t[e != 0]), minlength=len(tj)
+        )
+        qj = rj + mj.roll(1).index_put((torch.tensor(0),), torch.tensor(0))
+
+        # at risk at each interval
+        nj = t.shape[0] - torch.cumsum(qj, dim=0)
+
+        self._tj = tj
+        self._mj = mj
+        self._hj = mj / nj
+        self._sj = torch.cumprod(1 - (mj / nj), dim=0)
+
+    @torch.no_grad()
+    def __call__(self, time: TensorLike, lag: int = 0) -> torch.Tensor:
+        t = torch.as_tensor(time).squeeze()
+
+        if t.ndim > 1:
+            raise ValueError("`time` is not a 1D tensor")
+
+        if torch.any(t < 0):
+            raise ValueError("negative values in `time`")
+
+        idx = torch.searchsorted(self._tj, t, side="right") - 1 - lag
+        idx = torch.clamp(idx, 0)
+        return torch.atleast_1d(self._sj[idx])
