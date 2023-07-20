@@ -1,19 +1,20 @@
 import torch
+import pytest
 from hypothesis import given, example
 from hypothesis import strategies as st
 
 from discotime.metrics import BrierScore, BrierScoreScaled
-from discotime.utils import AalenJohansen, KaplanMeier
+from discotime.utils import AalenJohansen, IPCW
 
 
 @given(
-    tau=st.lists(st.floats(min_value=0, max_value=3.1999), min_size=1),
+    tau=st.lists(st.floats(0, 0.699), min_size=1, max_size=100),
 )
 def test_brier_score_1(tau, survival_data_2):
     """Before any event occurs (t=0.7) the following is true:
 
-    - An estimate of 100% gives a brier score of 0
-    - An estimate of 0% gives a brier score of 1
+    - An estimate of 100% gives a brier score of 1
+    - An estimate of 0% gives a brier score of 0
     - An estimate of 50% gives a brier score of 0.25
 
     """
@@ -24,9 +25,8 @@ def test_brier_score_1(tau, survival_data_2):
     all_zeros = torch.zeros_like(all_ones)
     all_half = torch.full_like(all_ones, 0.5)
 
-    brier_score(all_ones, tau, survival_data_2)
-    assert torch.all(brier_score(all_ones, tau, (time, event)) == 0)
-    assert torch.all(brier_score(all_zeros, tau, (time, event)) == 1)
+    assert torch.all(brier_score(all_ones, tau, (time, event)) == 1)
+    assert torch.all(brier_score(all_zeros, tau, (time, event)) == 0)
     assert torch.all(brier_score(all_half, tau, (time, event)) == 0.25)
 
 
@@ -38,28 +38,31 @@ def brier_score_nested(estimates, timepoints, survival_test):
     result as the vectorized one, otherwise a bug/error have been introduced
     somewhere - most likely in the "efficient" version.
     """
-    time, event = map(torch.as_tensor, survival_test)
-    S = torch.as_tensor(estimates)
+    futime, status = map(torch.as_tensor, survival_test)
+    tau = torch.as_tensor(timepoints)
+    St = torch.as_tensor(estimates)
 
-    GTi = torch.clamp(KaplanMeier(time, event == 0)(time), 0.001)
-    Gti = torch.clamp(KaplanMeier(time, event == 0)(timepoints), 0.001)
+    Gt = IPCW(futime, status)(tau, lag=0)
+    GT = IPCW(futime, status)(futime, lag=1)
 
-    out = torch.zeros_like(S)
-    for i, (Ti, di) in enumerate(zip(time, event)):
-        for j, t in enumerate(timepoints):
-            for k in range(S.shape[-1]):
-                surv = S[i][j][k]
-                p1 = (surv**2 * ((Ti <= t) & (di == k + 1))) / GTi[i]
-                p2 = ((1 - surv) ** 2 * ((Ti <= t) & (di != k + 1))) / GTi[i]
-                p3 = ((1 - surv) ** 2 * (Ti > t)) / Gti[j]
-                out[i, j, k] = p1 + p2 + p3
+    out = torch.zeros_like(St)
+    for i, (ti, s) in enumerate(zip(futime, status)):
+        for j, t in enumerate(tau):
+            for k in range(2):
+                p = St[i][j][k]
+                if ti <= t and s - 1 == k:
+                    out[i, j, k] = (1 - p) ** 2 / GT[i]
+                elif ti <= t and s != 0:
+                    out[i, j, k] = p**2 / GT[i]
+                elif ti > t:
+                    out[i, j, k] = p**2 / Gt[j]
 
     return torch.mean(out, dim=0)
 
 
 @given(
-    tau=st.lists(st.floats(min_value=0, max_value=24.3), min_size=1),
-    est=st.floats(min_value=0, max_value=1),
+    tau=st.lists(st.floats(0, 24.3), min_size=1, max_size=100),
+    est=st.floats(0, 1),
 )
 def test_brier_score_2(tau, est, survival_data_2):
     time, event = survival_data_2
@@ -89,8 +92,8 @@ def test_brier_score_2(tau, est, survival_data_2):
 
 
 @given(
-    tau=st.lists(st.floats(min_value=0, max_value=24.3), min_size=1),
-    est=st.floats(min_value=0, max_value=1),
+    tau=st.lists(st.floats(0, 24.3), min_size=1, max_size=10),
+    est=st.floats(0, 1),
 )
 def test_brier_score_3(tau, est, survival_data_2):
     """
@@ -102,11 +105,47 @@ def test_brier_score_3(tau, est, survival_data_2):
 
     phi_test = torch.full((len(time), len(tau), 2), est)
     phi_null = AalenJohansen(time, event)(tau)
-    phi_null = 1 - torch.as_tensor(phi_null).view(1, -1, 2).expand_as(phi_test)
+    phi_null = torch.as_tensor(phi_null).view(1, -1, 2).expand_as(phi_test)
 
     get_score = lambda x: brier_score(x, tau, (time, event))
 
     assert torch.all(get_score(phi_null).mean() <= get_score(phi_test).mean())
+
+
+@pytest.mark.parametrize(
+    ("cause", "tau", "expected"),
+    [
+        (1, [8.67], [0.192]),
+        (1, [15.77, 1.77], [0.04, 0.231]),
+        (1, [20.4, 2.57, 11.95, 12.85], [0.04, 0.231, 0.231, 0.249]),
+        (1, [8.71], [0.192]),
+        (1, [16.41, 20.18], [0.231, 0.247]),
+        (2, [21.84, 20.91, 18.83], [0.235, 0.235, 0.235]),
+        (2, [20.31, 12.49, 2.92, 0.56], [0, 0.076, 0.235, 0.235]),
+        (2, [23.38, 18.46, 15.24], [0.235, 0.235, 0.235]),
+    ],
+)
+def test_brier_score_null(tau, cause, expected, survival_data_2):
+    """Expected values obtained using the `riskRegression` R package.
+
+    ```{r}
+    cfit <- CSC(Hist(t, e) ~ 1, cause = _, data = data)
+    Score(list(cfit), formula=Hist(t, e) ~ 1, data=data, times=c(...), cause=_)
+    ```
+    """
+    futime, status = survival_data_2
+    tau = sorted(tau)
+
+    phi_null = AalenJohansen(futime, status)(tau)
+    phi_null = (
+        torch.as_tensor(phi_null)
+        .view(1, -1, 2)
+        .expand((len(futime), len(tau), 2))
+    )
+
+    brier_score = BrierScore(survival_train=(futime, status))
+    result = brier_score(phi_null, tau, (futime, status))[..., cause - 1]
+    assert result == pytest.approx(expected, abs=1e-3)
 
 
 @given(
@@ -123,10 +162,10 @@ def test_brier_score_scaled_1(tau, est, integrate, survival_data_2):
     tau = sorted(tau)
     time, event = survival_data_2
     brier_score_scaled = BrierScoreScaled(
-        survival_train=(time, event), integrate=integrate
+        survival_train=(time, event), eval_grid=tau, integrate=integrate
     )
     phi = torch.full((len(time), len(tau), 2), est)
-    bss = brier_score_scaled(phi, tau, survival_data_2)
+    bss = brier_score_scaled(phi, survival_data_2)
 
     expected_ndim = 1 if integrate else 2
     assert bss.ndim == expected_ndim

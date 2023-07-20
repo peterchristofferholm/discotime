@@ -1,11 +1,5 @@
-from typing import Optional, TypeVar
-
-import numpy as np
-import numpy.typing as npt
+from typing import Any, Optional, TypeVar
 import torch
-
-Int = int | np.int_
-Num = Int | float | np.float_
 
 TensorLike = TypeVar("TensorLike")
 
@@ -34,6 +28,8 @@ class Interpolate2D:
 
         xs = torch.as_tensor(xs).squeeze()
         ys = torch.as_tensor(ys)
+
+        assert xs.device == ys.device
 
         if xs.ndim != 1:
             raise ValueError("`xs` must be a 1D tensor.")
@@ -66,7 +62,8 @@ class Interpolate2D:
             xs = torch.clamp(xs, *self.xrange)
 
         # search self.xs to find what slope/intercept to use
-        idx = torch.searchsorted(self.xs, xs, side="left") - 1
+        idx = torch.searchsorted(self.xs, xs) - 1
+        idx[idx == -1] = 0
 
         if self.oob == "extrapolate":
             idx = torch.clamp(idx, min=0, max=self.m.shape[-1] - 1)
@@ -90,18 +87,20 @@ class KaplanMeier:
         >>> km(0)
         tensor([1.])
         >>> km([0, 1.0, 1.1, 1.5, 5])
-        tensor([1. , 1. , 1. , 0.5, 0.5])
+        tensor([1.0000, 1.0000, 1.0000, 0.5000, 0.5000])
     """
 
     @torch.no_grad()
-    def __init__(self, time: TensorLike, event: TensorLike) -> None:
+    def __init__(
+        self, time: TensorLike, event: TensorLike, lag: int = 0
+    ) -> None:
         _time = torch.as_tensor(time).squeeze()
         _event = torch.as_tensor(event).squeeze()
 
         if _event.ndim > 1 or _time.ndim > 1:
             raise ValueError("`time` and `event` should be 1D tensors")
 
-        if _event.unique().shape != (2,):
+        if _event.unique().shape > (2,):
             raise ValueError("there are more than 2 unique values in `event`")
 
         idx = torch.argsort(_time)
@@ -110,11 +109,11 @@ class KaplanMeier:
         # observed event times, which is guaranteed to include zero
         tj = torch.cat((torch.tensor([0]), _time[_event == 1])).unique()
 
-        # count censoring times
+        # count failure times
         tjm = torch.searchsorted(tj, _time[_event == 1], side="right")
         mj = torch.bincount(tjm, minlength=len(tj) + 1)[1:]
 
-        # count failure times
+        # count censoring times
         tjq = torch.searchsorted(tj, _time[_event == 0], side="right")
         qj = torch.bincount(tjq, minlength=len(tj) + 1)[1:]
 
@@ -124,6 +123,7 @@ class KaplanMeier:
         # product limit formula
         self._sj = torch.cumprod((nj - mj) / nj, 0)
         self._tj, self._nj, self._mj = tj, nj, mj
+        self.lag = lag
 
     @torch.no_grad()
     def __call__(self, time: TensorLike) -> torch.Tensor:
@@ -138,7 +138,8 @@ class KaplanMeier:
         if _time.ndim > 1:
             raise ValueError("`time` is not a 1D tensor")
 
-        idx = torch.searchsorted(self._tj, _time, side="right") - 1
+        idx = torch.searchsorted(self._tj, _time, side="right") - 1 - self.lag
+        idx = torch.clamp(idx, 0, len(self._sj))
         return torch.atleast_1d(self._sj[idx])
 
     @torch.no_grad()
@@ -186,7 +187,7 @@ class AalenJohansen:
         _time, _event = _time[idx], _event[idx]
 
         # observed event times, which is guaranteed to include zero
-        tj = torch.cat((torch.tensor([0]), _time)).unique()
+        tj = torch.cat((torch.tensor([0]).to(_time), _time)).unique()
 
         # nj is the number at risk at each of the intervals in tj
         qj = torch.bincount(torch.searchsorted(tj, _time) + 1)[:-1]
@@ -203,7 +204,7 @@ class AalenJohansen:
 
         # cause-specific incidences
         n_risks = n_causes if n_causes else torch.max(_event)
-        ci = torch.zeros((len(tj), n_risks))
+        ci = torch.zeros((len(tj), n_risks)).to(tj)
         for e in range(1, n_risks + 1):
             te = _time[_event == e]
             mcj = torch.bincount(torch.searchsorted(tj, te), minlength=len(tj))
@@ -221,7 +222,7 @@ class AalenJohansen:
             time (num | seq[num]): `t`'s for which `km(t)` will be returned.
         """
 
-        _time = torch.as_tensor(time).squeeze()
+        _time = torch.as_tensor(time).squeeze().to(self._tj)
 
         if _time.ndim > 1:
             raise ValueError("`time` is not a 1D tensor")
@@ -231,3 +232,49 @@ class AalenJohansen:
 
         idx = torch.searchsorted(self._tj, _time, side="right") - 1
         return torch.atleast_1d(self._ci[idx])
+
+
+class IPCW:
+    @torch.no_grad()
+    def __init__(self, time=TensorLike, event=TensorLike) -> None:
+        t = torch.as_tensor(time).squeeze()
+        e = torch.as_tensor(event).squeeze()
+
+        if e.ndim > 1 or e.ndim > 1:
+            raise ValueError("`time` and `event` should be 1D tensors")
+
+        idx = torch.argsort(t)
+        t, e = t[idx], e[idx]
+
+        # observed times
+        tj = torch.unique(torch.cat((torch.tensor([0]), t)))
+
+        mj = torch.bincount(
+            torch.searchsorted(tj, t[e == 0]), minlength=len(tj)
+        )
+        rj = torch.bincount(
+            torch.searchsorted(tj, t[e != 0]), minlength=len(tj)
+        )
+        qj = rj + mj.roll(1).index_put((torch.tensor(0),), torch.tensor(0))
+
+        # at risk at each interval
+        nj = t.shape[0] - torch.cumsum(qj, dim=0)
+
+        self._tj = tj
+        self._mj = mj
+        self._hj = mj / nj
+        self._sj = torch.cumprod(1 - (mj / nj), dim=0)
+
+    @torch.no_grad()
+    def __call__(self, time: TensorLike, lag: int = 0) -> torch.Tensor:
+        t = torch.as_tensor(time).squeeze()
+
+        if t.ndim > 1:
+            raise ValueError("`time` is not a 1D tensor")
+
+        if torch.any(t < 0):
+            raise ValueError("negative values in `time`")
+
+        idx = torch.searchsorted(self._tj, t, side="right") - 1 - lag
+        idx = torch.clamp(idx, 0)
+        return torch.atleast_1d(self._sj[idx])

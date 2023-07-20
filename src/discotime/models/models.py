@@ -6,10 +6,9 @@ import torch
 from torch.nn import functional as F
 from torch import nn
 from lightning import pytorch as pl
-import numpy as np
 
 from discotime.models.components import Net, negative_log_likelihood
-from discotime.metrics import IPA
+from discotime.metrics import BrierScoreScaled
 from discotime.datasets import LitSurvDataModule
 from discotime.utils import Interpolate2D
 
@@ -130,7 +129,7 @@ class LitSurvModule(pl.LightningModule):
                     "Try calling `self.setup()` first."
                 )
             )
-        return self._eval_grid
+        return self._eval_grid.to(self.device)
 
     @property
     def data_cuts(self) -> torch.Tensor:
@@ -141,7 +140,7 @@ class LitSurvModule(pl.LightningModule):
                     "Try calling `self.setup()` first."
                 )
             )
-        return self._data_cuts
+        return self._data_cuts.to(self.device)
 
     def setup(self, stage):
         """Called at the beginning of fit (train + validate), validate, test,
@@ -186,16 +185,26 @@ class LitSurvModule(pl.LightningModule):
             # get attributes from the datamodule
             self._data_cuts = torch.as_tensor(self.datamodule.cuts)
             if conf.evaluation_grid_cuts is not None:
-                self._eval_grid = torch.as_tensor(conf.evaluation_grid_cuts)
+                self._eval_grid = torch.as_tensor(
+                    conf.evaluation_grid_cuts, device=self.device
+                )
             else:
                 start, end = self.datamodule.time_range
                 self._eval_grid = torch.linspace(
-                    start=start, end=end, steps=conf.evaluation_grid_size  # type: ignore
+                    start=start,
+                    end=end,
+                    steps=conf.evaluation_grid_size,
+                    device=self.device,
                 )
 
             # instantiate metrics
-            self._metrics["IPA"] = IPA(
-                np.asarray(self.eval_grid, dtype=np.float_), integrate=True
+            self._metrics["IPA"] = BrierScoreScaled(
+                survival_train=(
+                    self.datamodule._dset_fit.event_time_cont,
+                    self.datamodule._dset_fit.event_status_cont,
+                ),
+                eval_grid=self.eval_grid,
+                integrate=True,
             )
 
     def on_save_checkpoint(self, checkpoint: Dict[str, Any]) -> None:
@@ -241,11 +250,11 @@ class LitSurvModule(pl.LightningModule):
 
     def on_test_epoch_end(self) -> None:
         estimates, ct, ce = map(
-            lambda x: torch.cat(x).cpu(), zip(*self._test_step_outputs)
+            lambda x: torch.cat(x), zip(*self._test_step_outputs)
         )
         self._test_step_outputs.clear()  # empty list
         for metric, metric_fn in self._metrics.items():
-            values = metric_fn(estimates, ct, ce)
+            values = metric_fn(estimates, (ct, ce))
             for cause, value in enumerate(values, start=1):
                 self.log(f"test_{metric}_cause{cause}", value)
 
@@ -255,24 +264,26 @@ class LitSurvModule(pl.LightningModule):
         )
         self._validation_step_outputs.clear()  # empty list
         for metric, metric_fn in self._metrics.items():
-            values = metric_fn(estimates, ct, ce)
+            values = metric_fn(estimates, (ct, ce))
             for cause, value in enumerate(values, start=1):
                 self.log(f"val_{metric}_cause{cause}", value)
 
     def _predict_estimates(
-        self, x: torch.Tensor, timepoints: torch.Tensor
+        self,
+        x: torch.Tensor,
+        timepoints: torch.Tensor,
     ) -> torch.Tensor:
-        c_haz = F.softmax(self(x), dim=-1)
+        est = F.softmax(self(x), dim=-1)
+        surv = torch.cumprod(est[..., [0]], dim=1)
 
-        s = torch.cumprod(c_haz[..., [0]], dim=1)
-        s_lag = torch.roll(s, shifts=1, dims=1)
-        s_lag[:, 0, :] = 1
+        surv_lag = torch.roll(surv, shifts=1, dims=1)
+        surv_lag[:, 0, :] = 1  # starts with 100%
 
         # convert conditional hazards to cause-specific cumulative incidence
-        proba = torch.cumsum(s_lag * c_haz[..., 1:], dim=1)
+        proba = torch.cumsum(surv_lag * est[..., 1:], dim=1)
         proba = F.pad(proba, pad=(0, 0, 1, 0))
 
-        return Interpolate2D(self.data_cuts, proba)(timepoints)
+        return Interpolate2D(self.data_cuts, proba, dim=1)(timepoints)
 
     def configure_optimizers(self) -> torch.optim.Optimizer:
         return torch.optim.Adam(self.model.parameters(), self.learning_rate)

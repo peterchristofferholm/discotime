@@ -1,8 +1,8 @@
-from typing import Any, TypeVar
+from typing import TypeVar
 from itertools import pairwise
 
 import torch
-from discotime.utils import KaplanMeier, AalenJohansen
+from discotime.utils import AalenJohansen, IPCW
 
 TensorLike = TypeVar("TensorLike")
 
@@ -23,7 +23,7 @@ class BrierScore:
         if futime.ndim > 1 or status.ndim > 1:
             raise ValueError("`futime` and `status` should be 1D tensors")
 
-        self.ipcw = KaplanMeier(futime, status == 0)
+        self.ipcw = IPCW(futime, status)
 
     @torch.no_grad()
     def __call__(
@@ -71,57 +71,88 @@ class BrierScore:
             status.view(-1, 1, 1) == torch.arange(1, n_risks + 1),
         )
         # ... did something else happen?
-        I2 = torch.logical_and(
-            futime.view(-1, 1, 1) <= tau.view(1, -1, 1),
-            status.view(-1, 1, 1) != torch.arange(1, n_risks + 1),
+        # fmt: off
+        I2 = (
+            (futime.view(-1, 1, 1) <= tau.view(1, -1, 1))
+            .logical_and(status.view(-1, 1, 1) != torch.zeros_like(I1))
+            .logical_and(status.view(-1, 1, 1) != torch.arange(1, n_risks + 1))
         )
+        # fmt: on
         # ... or is individual still in the risk set?
         I3 = futime.view(-1, 1, 1) > tau.view(1, -1, 1)
 
         # The IPCW is clamped such that one individual is not "dominating" the
         # score. see Kvamme & Borgan. "The Brier Score under Administrative
         # Censoring: Problems and a Solution."
-        Gt = torch.clamp(self.ipcw(tau).reshape(1, -1, 1), min=0.001)
-        GTi = torch.clamp(self.ipcw(futime).reshape(-1, 1, 1), min=0.001)
+        Gt = torch.clamp(self.ipcw(tau, lag=0).reshape(1, -1, 1), min=1e-4)
+        GTi = torch.clamp(self.ipcw(futime, lag=1).reshape(-1, 1, 1), min=1e-4)
 
-        results = I1 * St**2 / GTi
-        results += I2 * (1 - St) ** 2 / GTi
-        results += I3 * (1 - St) ** 2 / Gt
+        results = I1 * (1 - St) ** 2 / GTi
+        results += I2 * (St**2) / GTi
+        results += I3 * (St**2) / Gt
 
         return torch.mean(results, dim=0)
 
 
 class BrierScoreScaled:
+    """Index of prediction accuracy (IPA) for right-censored survival models.
+
+    In the context of survival analysis, the IPA is also known as the Brier
+    skill score (BSS).
+    """
+
+    @torch.no_grad()
     def __init__(
         self,
         survival_train: tuple[TensorLike, TensorLike],
+        eval_grid: TensorLike,
         integrate: bool = False,
     ) -> None:
-        self.brier_score = BrierScore(survival_train=survival_train)
-        self.integrate = integrate
+        """
+        Args:
+            timepoints: sequence of `t` timepoints to evaluate.
+            causes: causes for which the brier score is calculated.
+            integrate: should the time-dependent IPA be integrated?
+                (default: True)
+        """
+        eval_grid = torch.as_tensor(eval_grid)
 
-    def __call__(
-        self,
-        estimates: TensorLike,
-        timepoints: TensorLike,
-        survival_test: tuple[TensorLike, TensorLike],
-    ) -> torch.Tensor:
-        if len({*timepoints}) != len(timepoints):
+        if len({*eval_grid}) != len(eval_grid):
             raise ValueError("values in `timepoints` are not unique")
 
-        if not all(a < b for a, b in pairwise(timepoints)):
+        if not all(a <= b for a, b in pairwise(eval_grid)):
             raise ValueError("values in `timepoints` are not sorted")
 
-        if self.integrate and len(timepoints) == 1:
+        if integrate and len(eval_grid) == 1:
             raise ValueError(
                 "at least two values in `timepoints` are required when "
                 "self.integrate = True"
             )
 
-        tau = torch.as_tensor(timepoints)
+        self.brier_score = BrierScore(survival_train=survival_train)
+        self.eval_grid = eval_grid
+        self.integrate = integrate
 
+    @torch.no_grad()
+    def __call__(
+        self,
+        estimates: TensorLike,
+        survival_test: tuple[TensorLike, TensorLike],
+    ) -> torch.Tensor:
+        """Calculate the index of prediction accuracy.
+
+        Args:
+            estimates: array[batch, timepoints, cause]
+                model estimates of cause probabilities.
+            time: observed follow-up.
+            event: event indicator at time with 0 as censoring.
+
+        If there are multiple timepoints to consider, then the IPA is
+        numerically integrated using the trapezoidal method.
+        """
         phi_test = torch.as_tensor(estimates)
         n_causes = phi_test.shape[-1]
+        tau = self.eval_grid
 
         futime, status = survival_test
         futime = torch.as_tensor(futime).squeeze()
@@ -130,8 +161,8 @@ class BrierScoreScaled:
         cic = 1 - AalenJohansen(futime, status, n_causes)(tau)
         phi_null = cic.unsqueeze(0).expand_as(phi_test)
 
-        bs_test = self.brier_score(phi_test, timepoints, survival_test)
-        bs_null = self.brier_score(phi_null, timepoints, survival_test)
+        bs_test = self.brier_score(phi_test, tau, survival_test)
+        bs_null = self.brier_score(phi_null, tau, survival_test)
 
         if self.integrate:
             bs_null = torch.trapezoid(bs_null, tau.view(-1, 1), dim=0)

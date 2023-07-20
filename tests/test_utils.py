@@ -1,10 +1,11 @@
 import torch
 import pytest
+from pytest import approx
 import hypothesis
 import hypothesis.strategies as st
 from einops import repeat
 
-from discotime.utils import KaplanMeier, AalenJohansen, Interpolate2D
+from discotime.utils import KaplanMeier, AalenJohansen, Interpolate2D, IPCW
 
 ### KaplanMeier ###############################################################
 
@@ -51,6 +52,21 @@ def test_kaplan_meier_percentiles_errors(percentile, km_estimator):
 def test_kaplan_meier_percentiles_unobserved(km_estimator):
     t_max, p_min = km_estimator._tj[-1], km_estimator._sj[-1]
     assert km_estimator.percentile(p_min - 0.05) == t_max
+
+
+### IPCW ######################################################################
+
+
+def test_ipcw_1(survival_data_2):
+    time = [t for t, e in zip(*survival_data_2) if e == 0]
+    ipcw = IPCW(*survival_data_2)
+
+    assert ipcw(time, lag=0) == approx(
+        [0.95, 0.87083, 0.76198, 0.63498, 0.47624, 0.0], abs=1e-5
+    )
+    assert ipcw(time, lag=1) == approx(
+        [1.0, 0.95, 0.87083, 0.76198, 0.63498, 0.47624], abs=1e-5
+    )
 
 
 ### AalenJohansen #############################################################

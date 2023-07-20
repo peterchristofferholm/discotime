@@ -236,7 +236,7 @@ def _cuts_number(
     _time, _event = map(np.asarray, (time, event))
     km = KaplanMeier(_time, (_event != 0).astype(np.int_))
     qs = np.linspace(1, km(max_time).item(), n_bins + 1)
-    return km.percentile(qs, dtype=np.float64)
+    return np.asarray(km.percentile(qs), dtype=np.float64)
 
 
 class LabelDiscretizer:
