@@ -1,8 +1,8 @@
-name: Discotime Actions
+name: release actions
 
 on: 
   release:
-    type: ["published"]
+    types: [published]
 
 jobs:
 
