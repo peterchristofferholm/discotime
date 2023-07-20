@@ -5,6 +5,7 @@ discotime
    :members:
    :undoc-members:
    :show-inheritance:
+   :noindex:
 
 .. toctree::
    :maxdepth: 4
