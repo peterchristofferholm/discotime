@@ -175,7 +175,7 @@ class AalenJohansen:
         n_causes: Optional[int] = None,
     ) -> None:
         _time = torch.as_tensor(time).squeeze()
-        _event = torch.as_tensor(event).squeeze()
+        _event = torch.as_tensor(event).squeeze().int()
 
         if _event.ndim > 1 or _time.ndim > 1:
             raise ValueError("`time` and `event` should be 1D tensors")
@@ -202,8 +202,10 @@ class AalenJohansen:
         sj = torch.cumprod((nj - mj) / nj, dim=0).roll(1)
         sj[0] = 1
 
+        n_risks = n_causes if n_causes else torch.max(_event).item()
+        assert isinstance(n_risks, int)  # type narrowing
+
         # cause-specific incidences
-        n_risks = n_causes if n_causes else torch.max(_event)
         ci = torch.zeros((len(tj), n_risks)).to(tj)
         for e in range(1, n_risks + 1):
             te = _time[_event == e]

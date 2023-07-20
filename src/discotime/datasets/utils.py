@@ -79,6 +79,9 @@ class SurvDataset(Dataset):
             event_status_cont=self.event_status_cont[index],
         )
 
+    def __iter__(self):
+        return self
+
 
 ###############################################################################
 
@@ -128,6 +131,18 @@ class LitSurvDataModule(pl.LightningDataModule, metaclass=ABCMeta):
         return self.lab_transformer.cuts
 
     @property
+    def dset_fit(self) -> SurvDataset:
+        if self._dset_fit is None:
+            raise AttributeError("`self._dset_fit` has not been prepared.")
+        return self._dset_fit
+
+    @property
+    def dset_test(self) -> SurvDataset:
+        if self._dset_test is None:
+            raise AttributeError("`self._dset_test` has not been prepared.")
+        return self._dset_test
+
+    @property
     def n_time_bins(self) -> int:
         return self.config.n_time_bins
 
@@ -137,7 +152,7 @@ class LitSurvDataModule(pl.LightningDataModule, metaclass=ABCMeta):
 
     @property
     @abstractmethod
-    def time_range(self) -> tuple[Num, Num]:
+    def time_range(self) -> tuple[float, float]:
         ...
 
     @property

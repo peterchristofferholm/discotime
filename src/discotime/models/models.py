@@ -200,8 +200,8 @@ class LitSurvModule(pl.LightningModule):
             # instantiate metrics
             self._metrics["IPA"] = BrierScoreScaled(
                 survival_train=(
-                    self.datamodule._dset_fit.event_time_cont,
-                    self.datamodule._dset_fit.event_status_cont,
+                    self.datamodule.dset_fit.event_time_cont,
+                    self.datamodule.dset_fit.event_status_cont,
                 ),
                 eval_grid=self.eval_grid,
                 integrate=True,
@@ -269,9 +269,7 @@ class LitSurvModule(pl.LightningModule):
                 self.log(f"val_{metric}_cause{cause}", value)
 
     def _predict_estimates(
-        self,
-        x: torch.Tensor,
-        timepoints: torch.Tensor,
+        self, x: torch.Tensor, timepoints: Any
     ) -> torch.Tensor:
         est = F.softmax(self(x), dim=-1)
         surv = torch.cumprod(est[..., [0]], dim=1)
