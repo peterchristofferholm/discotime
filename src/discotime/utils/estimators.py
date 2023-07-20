@@ -2,6 +2,7 @@ from typing import Any, Optional, TypeVar
 import torch
 
 TensorLike = TypeVar("TensorLike")
+"Object that can be converted to a tensor"
 
 
 class Interpolate2D:

@@ -5,6 +5,7 @@ import torch
 from discotime.utils import AalenJohansen, IPCW
 
 TensorLike = TypeVar("TensorLike")
+"Object that can be converted to a tensor"
 
 
 class BrierScore:

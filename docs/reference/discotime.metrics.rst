@@ -13,4 +13,3 @@ Submodules
    :maxdepth: 4
 
    discotime.metrics.brier_score
-   discotime.metrics.ipa
