@@ -159,7 +159,7 @@ class BrierScoreScaled:
         futime = torch.as_tensor(futime).squeeze()
         status = torch.as_tensor(status).squeeze()
 
-        cic = 1 - AalenJohansen(futime, status, n_causes)(tau)
+        cic = AalenJohansen(futime, status, n_causes)(tau)
         phi_null = cic.unsqueeze(0).expand_as(phi_test)
 
         bs_test = self.brier_score(phi_test, tau, survival_test)

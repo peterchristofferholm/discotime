@@ -1,5 +1,8 @@
 import pytest
 
+from discotime.models import LitSurvModule, ModelConfig
+from discotime.datasets import Mgus2, DataConfig
+
 
 @pytest.fixture(scope="session")
 def survival_data_1():
@@ -26,3 +29,18 @@ def survival_data_2():
         *[(v, i) for (i, times) in enumerate(data) for v in times]
     )
     return (time, event)
+
+
+@pytest.fixture(scope="session")
+def default_mgus2_model():
+    model = LitSurvModule(ModelConfig())
+    model.datamodule = Mgus2(
+        DataConfig(
+            batch_size=60,
+            n_time_bins=20,
+            discretization_scheme="number",
+        )
+    )
+    model.datamodule.setup(stage="fit")
+    model.setup(stage="fit")
+    return model
