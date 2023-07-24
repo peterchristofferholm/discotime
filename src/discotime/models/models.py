@@ -1,4 +1,4 @@
-from typing import Optional, Any, Callable, Dict
+from typing import Optional, Any, Callable, Dict, Sequence
 from dataclasses import dataclass
 import warnings
 
@@ -25,8 +25,8 @@ class ModelConfig:
     """Number of neural-network layer blocks.
 
     Each block is modelled after a ResNet skip-block and contains the following
-    key elements: 
-    
+    key elements:
+
     .. code-block ::
 
         Sequential(
@@ -39,14 +39,14 @@ class ModelConfig:
         )
 
     Per default the output of the model is ``self.act_fn(x + self.net(x))``
-    but the skip part can be removed by setting :attr:`use_skip_connections` to 
-    ``False``. :attr:`n_hidden_units` controls the size of the linear layers in 
-    each block. See :class:`.components.Block` for more details 
+    but the skip part can be removed by setting :attr:`use_skip_connections` to
+    ``False``. :attr:`n_hidden_units` controls the size of the linear layers in
+    each block. See :class:`.components.Block` for more details
     on the actual implementation.
     """
     n_hidden_units: int = 20
     """Number of neurons in each of the hidden layers.
-    
+
     For ease of of use, the size of each hidden layer have been constrained to
     to be the exact same size as all the others. Default is 20.
     """
@@ -59,16 +59,14 @@ class ModelConfig:
     use_skip_connections: bool = False
     """Toggle the use of skip-connections in the model blocks."""
 
-    evaluation_grid_size: int = 50
-    """Either the length of (int) or the specific grid (seq of floats) at which
-    model metrics are calculated. If an integer `n` is passed, then `n` evenly
+    evaluation_grid_size: Optional[int] = 50
+    """An integer `n`, then `n` evenly
     distributed timepoint are chosen from the range of the data.
     """
-    evaluation_grid_cuts: Optional[int] = None
-    """Either the length of (int) or the specific grid (seq of floats) at which
-    model metrics are calculated. If an integer `n` is passed, then `n` evenly
-    distributed timepoint are chosen from the range of the data.
+    evaluation_grid_cuts: Optional[Sequence[float]] = None
+    """Specify the grid (seq of floats) at which model metrics are calculated.
     """
+
     n_time_bins: Optional[int] = None
     """Number of time bins in discretization grid.
 
