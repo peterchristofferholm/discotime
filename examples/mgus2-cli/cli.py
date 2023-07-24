@@ -14,15 +14,15 @@ class CustomLightningCLI(cli.LightningCLI):
 
 
 def cli_main(args: cli.ArgsType = None):
-    from discotime.datasets import GSE5479
+    from discotime.datasets import Mgus2
     from discotime.models import LitSurvModule
 
     filterwarnings("ignore", message=".*`num_workers`")
     CustomLightningCLI(
         model_class=LitSurvModule,
-        datamodule_class=GSE5479,
+        datamodule_class=Mgus2,
         save_config_callback=None,
-        seed_everything_default=5479,
+        seed_everything_default=123,
         args=args,
     )
 
