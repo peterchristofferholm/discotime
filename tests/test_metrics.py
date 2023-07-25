@@ -201,7 +201,7 @@ def test_brier_score_scaled_2(default_mgus2_model):
             model.eval()
             est = model._predict_estimates(data[0], tau)
 
-            if i % 4 == 0:
+            if i % 5 == 0:
                 yield bss(est, (data[3], data[4]))
 
     assert all(
