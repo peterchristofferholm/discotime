@@ -1,4 +1,4 @@
-from itertools import pairwise
+from itertools import pairwise, count, islice
 
 import torch
 import pytest
@@ -183,13 +183,12 @@ def test_brier_score_scaled_2(default_mgus2_model):
     data = [*map(torch.as_tensor, model.datamodule.dset_fit[:])]
 
     tau = torch.linspace(10, 365, 50)
-    est = model._predict_estimates(data[0], tau)
     bss = BrierScoreScaled((data[3], data[4]), tau, True)
 
     def training_loop():
         optim = model.configure_optimizers()
 
-        for _ in range(10):
+        for i in count():
             model.train()
             for batch_idx, batch in enumerate(
                 model.datamodule.train_dataloader()
@@ -201,8 +200,11 @@ def test_brier_score_scaled_2(default_mgus2_model):
 
             model.eval()
             est = model._predict_estimates(data[0], tau)
-            yield bss(est, (data[3], data[4]))
+
+            if i % 4 == 0:
+                yield bss(est, (data[3], data[4]))
 
     assert all(
-        torch.all(a <= (b + 0.01)) for (a, b) in pairwise(training_loop())
+        torch.all(a <= (b + 0.01))
+        for (a, b) in pairwise(islice(training_loop(), 20))
     )

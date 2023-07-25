@@ -34,13 +34,7 @@ def survival_data_2():
 @pytest.fixture(scope="session")
 def default_mgus2_model():
     model = LitSurvModule(ModelConfig())
-    model.datamodule = Mgus2(
-        DataConfig(
-            batch_size=60,
-            n_time_bins=20,
-            discretization_scheme="number",
-        )
-    )
+    model.datamodule = Mgus2(DataConfig(batch_size=64))
     model.datamodule.setup(stage="fit")
     model.setup(stage="fit")
     return model
