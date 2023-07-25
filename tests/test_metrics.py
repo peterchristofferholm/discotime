@@ -1,3 +1,5 @@
+from itertools import pairwise, count, islice
+
 import torch
 import pytest
 from hypothesis import given, example
@@ -174,3 +176,35 @@ def test_brier_score_scaled_1(tau, est, integrate, survival_data_2):
     assert bss.shape == expected_shape
 
     assert torch.all(bss <= 1)
+
+
+def test_brier_score_scaled_2(default_mgus2_model):
+    model = default_mgus2_model
+    data = [*map(torch.as_tensor, model.datamodule.dset_fit[:])]
+
+    tau = torch.linspace(10, 365, 50)
+    bss = BrierScoreScaled((data[3], data[4]), tau, True)
+
+    def training_loop():
+        optim = model.configure_optimizers()
+
+        for i in count():
+            model.train()
+            for batch_idx, batch in enumerate(
+                model.datamodule.train_dataloader()
+            ):
+                optim.zero_grad()
+                loss = model.training_step(batch, batch_idx)
+                model.backward(loss)
+                optim.step()
+
+            model.eval()
+            est = model._predict_estimates(data[0], tau)
+
+            if i % 5 == 0:
+                yield bss(est, (data[3], data[4]))
+
+    assert all(
+        torch.all(a <= (b + 0.01))
+        for (a, b) in pairwise(islice(training_loop(), 20))
+    )

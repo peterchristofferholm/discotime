@@ -248,7 +248,7 @@ class LitSurvModule(pl.LightningModule):
 
     def on_test_epoch_end(self) -> None:
         estimates, ct, ce = map(
-            lambda x: torch.cat(x), zip(*self._test_step_outputs)
+            lambda x: torch.cat(x).cpu(), zip(*self._test_step_outputs)
         )
         self._test_step_outputs.clear()  # empty list
         for metric, metric_fn in self._metrics.items():
