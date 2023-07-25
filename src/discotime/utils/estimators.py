@@ -207,7 +207,7 @@ class AalenJohansen:
         assert isinstance(n_risks, int)  # type narrowing
 
         # cause-specific incidences
-        ci = torch.zeros((len(tj), n_risks)).to(tj)
+        ci = torch.zeros((len(tj), n_risks), dtype=torch.double)
         for e in range(1, n_risks + 1):
             te = _time[_event == e]
             mcj = torch.bincount(torch.searchsorted(tj, te), minlength=len(tj))
