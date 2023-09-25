@@ -101,6 +101,69 @@ class Net(nn.Module):
         return self.net(x)
 
 
+def deephit(
+    logits: torch.Tensor, time: torch.Tensor, event: torch.Tensor, weight_nll: float = 1.0,
+    weight_rank_loss: float = 0.1, weight_calibration_loss: float = 0.1
+) -> torch.Tensor:
+    loss = weight_nll * negative_log_likelihood(logits, time, event) + \
+        weight_rank_loss * _rank_loss(logits, time, event) + \
+        weight_calibration_loss * _calibration_loss(logits, time, event)
+    return loss
+     
+
+def get_deephit_fc2_mask(time: torch.Tensor, max_time: float):
+    """Get mask for the ranking loss in DeepHit.
+
+    Args:
+        time (:obj:`torch.Tensor`): discretized event times
+        max_event (float): max time. Defaults to 100.
+    """
+    time_index = torch.arange(max_time).unsqueeze(0) < time.unsqueeze(-1) #TODO - check if this is correct original deephit implementation starts with 1 not 0 so adds 1 to time
+    mask = torch.zeros((time.size(0), max_time)).to(time)
+    mask[time_index] = 1.0
+    return mask
+
+def _rank_loss(
+    logits: torch.Tensor, time: torch.Tensor, event: torch.Tensor, 
+    num_risks: int = 2, max_time: int = 100
+): 
+    """Ranking loss for DeepHit.
+    Num risks represent the num_Event variable in the original implementation
+    max time represent the num_Category variable in the original implementation
+    """
+    _, max_time, num_risks = logits.size()
+    sigma1 = torch.tensor(0.1, dtype=torch.float32)
+    fc_mask2 = get_deephit_fc2_mask(time, max_time=max_time)
+    eta = []
+    for e in range(num_risks):
+        one_vector = torch.ones_like(time.unsqueeze(-1), dtype=torch.float32)
+        I_2 = torch.eq(event, e).float()  # indicator for event
+        I_2 = torch.diag(torch.squeeze(I_2))
+        tmp_e = logits[:, :, e].view(-1, max_time)  # event-specific joint prob.
+
+        R = torch.matmul(tmp_e, fc_mask2.t().float())
+        diag_R = torch.diag_embed(R.diagonal(dim1=-2, dim2=-1))
+        R = torch.matmul(one_vector.squeeze(), diag_R.t().float()) - R
+        R = R.t().float()
+
+        t1 = torch.matmul(one_vector, time.unsqueeze(-1).t().float())
+        t2 = torch.matmul(time.unsqueeze(-1).float(), one_vector.t())
+        T = torch.nn.functional.relu(torch.sign( t1 - t2))
+        T = torch.matmul(I_2, T)
+
+        tmp_eta = torch.mean(T * torch.exp(-R / sigma1), dim=1, keepdim=True)
+
+        eta.append(tmp_eta)
+    eta = torch.stack(eta, dim=1)
+    eta = torch.mean(eta.view(-1, num_risks), dim=1, keepdim=True)
+
+    loss = torch.sum(eta)
+    return loss
+
+def _calibration_loss(logits: torch.Tensor, time: torch.Tensor, event: torch.Tensor,):
+    print("Calibration loss is not implemented yet.")
+    return 0 
+
 def negative_log_likelihood(
     logits: torch.Tensor, time: torch.Tensor, event: torch.Tensor
 ) -> torch.Tensor:

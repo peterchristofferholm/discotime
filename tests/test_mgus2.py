@@ -2,6 +2,7 @@ import logging
 
 from pytest import fixture
 from pytest import mark
+from pytest import raises
 from lightning import Trainer
 
 from discotime.datasets import Mgus2, DataConfig
@@ -53,3 +54,11 @@ def test_model_integration(mgus2_dm: Mgus2):
     trainer.test(model, mgus2_dm)
 
     assert True
+
+@mark.filterwarnings("ignore")
+def test_loss_parameter():
+    model = LitSurvModule(ModelConfig(loss="deephit"))
+    model = LitSurvModule(ModelConfig())
+
+    with raises(ValueError):
+       LitSurvModule(ModelConfig(loss='not_a_loss')) 

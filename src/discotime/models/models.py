@@ -7,7 +7,7 @@ from torch.nn import functional as F
 from torch import nn
 from lightning import pytorch as pl
 
-from discotime.models.components import Net, negative_log_likelihood
+from discotime.models.components import Net, negative_log_likelihood, deephit
 from discotime.metrics import BrierScoreScaled
 from discotime.datasets import LitSurvDataModule
 from discotime.utils import Interpolate2D
@@ -67,6 +67,10 @@ class ModelConfig:
     """Specify the grid (seq of floats) at which model metrics are calculated.
     """
 
+    loss: str = "negative_log_likelihood"
+    """Name of loss function (str). The name needs to match one of the
+    loss implemented in components.py."""
+
     n_time_bins: Optional[int] = None
     """Number of time bins in discretization grid.
 
@@ -80,6 +84,13 @@ class ModelConfig:
     the attached datamodule during setup.
     """
 
+    def __post_init__(self):
+        """Check that the loss function is implemented."""
+        
+        if self.loss not in ['negative_log_likelihood', 'deephit']:
+            raise ValueError(f'Loss function {self.loss} not implemented. \
+Please choose between "negative_log_likelihood" and "deephit"')
+
 
 class LitSurvModule(pl.LightningModule):
     def __init__(self, config: ModelConfig) -> None:
@@ -87,7 +98,7 @@ class LitSurvModule(pl.LightningModule):
         self.config = config
         self.learning_rate = config.learning_rate
 
-        self._loss = negative_log_likelihood
+        self._loss: Callable = eval(config.loss)
         self._metrics: dict[str, Callable] = {}
         self._eval_grid: Optional[torch.Tensor] = None
         self._data_cuts: Optional[torch.Tensor] = None
