@@ -101,7 +101,7 @@ class Net(nn.Module):
         return self.net(x)
 
 
-def deephit(
+def deephit_loss(
     logits: torch.Tensor, time: torch.Tensor, event: torch.Tensor, weight_nll: float = 1.0,
     weight_rank_loss: float = 0.1, weight_calibration_loss: float = 0.1
 ) -> torch.Tensor:

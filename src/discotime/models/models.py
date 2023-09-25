@@ -7,7 +7,7 @@ from torch.nn import functional as F
 from torch import nn
 from lightning import pytorch as pl
 
-from discotime.models.components import Net, negative_log_likelihood, deephit
+from discotime.models.components import Net, negative_log_likelihood, deephit_loss
 from discotime.metrics import BrierScoreScaled
 from discotime.datasets import LitSurvDataModule
 from discotime.utils import Interpolate2D
@@ -87,9 +87,9 @@ class ModelConfig:
     def __post_init__(self):
         """Check that the loss function is implemented."""
         
-        if self.loss not in ['negative_log_likelihood', 'deephit']:
+        if self.loss not in ['negative_log_likelihood', 'deephit_loss']:
             raise ValueError(f'Loss function {self.loss} not implemented. \
-Please choose between "negative_log_likelihood" and "deephit"')
+Please choose between "negative_log_likelihood" and "deephit_loss"')
 
 
 class LitSurvModule(pl.LightningModule):

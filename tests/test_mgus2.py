@@ -57,7 +57,7 @@ def test_model_integration(mgus2_dm: Mgus2):
 
 @mark.filterwarnings("ignore")
 def test_loss_parameter():
-    model = LitSurvModule(ModelConfig(loss="deephit"))
+    model = LitSurvModule(ModelConfig(loss="deephit_loss"))
     model = LitSurvModule(ModelConfig())
 
     with raises(ValueError):
